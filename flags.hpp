@@ -2,10 +2,11 @@
 
 // 01-basic.cpp
 
-#define FLAGS_IMPLEMENTATION
-#include "flags.hpp"
 #include <vector>
 #include <iostream>
+
+#define FLAGS_IMPLEMENTATION
+#include "flags.hpp"
 
 
 int main(int argc, char** argv)
