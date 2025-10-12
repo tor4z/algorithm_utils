@@ -1,3 +1,11 @@
+/*
+ * STB style lie theory lib
+ *
+ *  Ref.:
+ *  A micro Lie theory for state estimation in robotics
+ *
+*/
+
 #if 0 // examples
 
 // 01-vector.cpp
