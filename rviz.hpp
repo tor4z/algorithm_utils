@@ -1,3 +1,4 @@
+#include <iostream>
 #if 0 // examples:
 
 // 01-draw_pose.cpp
@@ -113,7 +114,7 @@ struct GridMap2d
     float range_y[2];
     float res_x;
     float res_y;
-    inline void set_occupy(float x, float y) { occupied_grid_.push_back({x, y}); }
+    inline void add_occupy(float x, float y) { occupied_grid_.push_back({.x=x, .y=y}); }
     inline void clear_occupies() { occupied_grid_.clear(); }
 private:
     friend class Viz;
@@ -171,11 +172,11 @@ class Viz
     }; // struct Drawable
 public:
     ~Viz();
-    void draw_pointcloud(const std::string& topic, const PointICloud& pc);
-    void draw_pointcloud(const std::string& topic, const PointRGBCloud& pc);
-    void draw_gridmap2d(const std::string& topic, const GridMap2d& map);
-    void draw_pose(const std::string& topic, const Pose& pose);
-    void draw_image();
+    bool draw_pointcloud(const std::string& topic, const PointICloud& pc);
+    bool draw_pointcloud(const std::string& topic, const PointRGBCloud& pc);
+    bool draw_gridmap2d(const std::string& topic, const GridMap2d& map);
+    bool draw_pose(const std::string& topic, const Pose& pose);
+    bool draw_image();
     void render();
     bool closed();
 private:
@@ -228,7 +229,7 @@ void heatmap(float intensity, Color& color)
     };
     static const auto palette_size{sizeof(palette) / sizeof(palette[0])};
 
-    const float palette_index{palette_size * intensity};
+    const auto palette_index{palette_size * intensity};
     const auto palette_index_floor{static_cast<int>(std::floor(palette_index))};
     const auto palette_index_ceil{static_cast<int>(std::ceil(palette_index))};
 
@@ -403,12 +404,21 @@ void Viz::render()
                         for (auto idx : map->occupied_grid_idx) {
                             const float x{map->range_x[0] + (idx % row) * map->res_x};
                             const float y{map->range_y[1] - static_cast<int>(idx / row) * map->res_y};
-                            DrawCube({x + half_cell_x, y - half_cell_y, 0}, map->res_x, map->res_y, 0.001f, GRAY);
+                            DrawCube({x + half_cell_x, y - half_cell_y, -0.01}, map->res_x, map->res_y, 0.001f, GRAY);
                         }
                     } break;
                 default:
                     assert(false && "Unknown drawable type");
                 }
+            }
+            {
+                Vector3 start{.x=0.0f, .y=0.0f, .z=0.0f};
+                Vector3 x_end{.x=0.0f, .y=1.0f, .z=0.0f};
+                Vector3 y_end{.x=-1.0f, .y=0.0f, .z=0.0f};
+                Vector3 z_end{.x=0.0f, .y=0.0f, .z=1.0f};
+                DrawLine3D(start, x_end, RED);
+                DrawLine3D(start, y_end, GREEN);
+                DrawLine3D(start, z_end, BLUE);
             }
         EndMode3D();
     EndDrawing();
@@ -416,7 +426,7 @@ void Viz::render()
 
 #define RVIZ_MAX_COLOR_VAL 255
 
-void Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
+bool Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
 {
     auto drawable{get_drawable(topic)};
     if (!drawable->mesh_model) drawable->mesh_model = new DrawableMeshModel;
@@ -435,9 +445,10 @@ void Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
     UploadMesh(&drawable->mesh_model->mesh, true);
     drawable->mesh_model->model = LoadModelFromMesh(drawable->mesh_model->mesh);
     drawable->type = DT_MESH_MODEL;
+    return true;
 }
 
-void Viz::draw_pointcloud(const std::string& topic, const PointICloud& pc)
+bool Viz::draw_pointcloud(const std::string& topic, const PointICloud& pc)
 {
     auto drawable{get_drawable(topic)};
     if (!drawable->mesh_model) drawable->mesh_model = new DrawableMeshModel;
@@ -458,9 +469,10 @@ void Viz::draw_pointcloud(const std::string& topic, const PointICloud& pc)
     UploadMesh(&drawable->mesh_model->mesh, true);
     drawable->mesh_model->model = LoadModelFromMesh(drawable->mesh_model->mesh);
     drawable->type = DT_MESH_MODEL;
+    return true;
 }
 
-void Viz::draw_gridmap2d(const std::string& topic, const GridMap2d& map)
+bool Viz::draw_gridmap2d(const std::string& topic, const GridMap2d& map)
 {
     auto drawable{get_drawable(topic)};
     std::lock_guard<std::mutex> guard{drawable->lock};
@@ -469,29 +481,36 @@ void Viz::draw_gridmap2d(const std::string& topic, const GridMap2d& map)
         drawable->map = new DrawableMap;
     }
 
-    assert(map.range_x[0] < map.range_x[1]);
-    assert(map.range_y[0] < map.range_y[1]);
-    assert(map.res_x > 0);
-    assert(map.res_y > 0);
-
-    drawable->map->range_x[0] = map.range_x[0];
-    drawable->map->range_x[1] = map.range_x[1];
-    drawable->map->range_y[0] = map.range_y[0];
-    drawable->map->range_y[1] = map.range_y[1];
-    drawable->map->res_x = map.res_x;
-    drawable->map->res_y = map.res_y;
-
-    const auto col{static_cast<int>((map.range_y[1] - map.range_y[0]) / map.res_y)};
-    for (const auto& ocp : map.occupied_grid_) {
-        if (ocp.x > map.range_x[1] || ocp.x < map.range_x[0]) continue;
-        if (ocp.y > map.range_y[1] || ocp.y < map.range_y[0]) continue;
-        const auto r{static_cast<int>((ocp.x - map.range_x[0]) / map.res_x)};
-        const auto c{static_cast<int>((ocp.y - map.range_y[0]) / map.res_y)};
-        drawable->map->occupied_grid_idx.push_back(r * col + c);
+    if(map.range_x[0] >= map.range_x[1] || map.range_y[0] >= map.range_y[1]) {
+        std::cerr << "Bad map range\n";
+        return false;
     }
+    if(map.res_x <= 0 || map.res_y <= 0) {
+        std::cerr << "Bad map resolution\n";
+        return false;
+    }
+
+    auto drawable_map{drawable->map};
+    drawable_map->range_x[0] = -map.range_y[1];
+    drawable_map->range_x[1] = -map.range_y[0];
+    drawable_map->range_y[0] = map.range_x[0];
+    drawable_map->range_y[1] = map.range_x[1];
+    drawable_map->res_x = map.res_y;
+    drawable_map->res_y = map.res_x;
+
+    const auto map_r{static_cast<int>((map.range_x[1] - map.range_x[0]) / map.res_x)};
+    const auto map_c{static_cast<int>((map.range_y[1] - map.range_y[0]) / map.res_y)};
+    for (const auto& ocp : map.occupied_grid_) {
+        if (ocp.x >= map.range_x[1] || ocp.x <= map.range_x[0]) continue;
+        if (ocp.y >= map.range_y[1] || ocp.y <= map.range_y[0]) continue;
+        const auto r{map_r - static_cast<int>((ocp.x - map.range_x[0]) / map.res_x) - 1};
+        const auto c{map_c - static_cast<int>((ocp.y - map.range_y[0]) / map.res_y) - 1};
+        drawable_map->occupied_grid_idx.push_back(r * map_c + c);
+    }
+    return true;
 }
 
-void Viz::draw_pose(const std::string& topic, const Pose& pose)
+bool Viz::draw_pose(const std::string& topic, const Pose& pose)
 {
     auto drawable{get_drawable(topic)};
     std::lock_guard<std::mutex> guard{drawable->lock};
@@ -519,11 +538,12 @@ void Viz::draw_pose(const std::string& topic, const Pose& pose)
     drawable->pose->z_end.y = pose.x + cos_roll * sin_pitch * cos_yaw - sin_roll * sin_yaw;
     drawable->pose->z_end.z = pose.z + cos_roll * cos_pitch;
     drawable->type = DT_POSE;
+    return true;
 }
 
-void Viz::draw_image()
+bool Viz::draw_image()
 {
-
+    return true;
 }
 
 } // namespace rviz
