@@ -1,4 +1,3 @@
-#include <iostream>
 #if 0 // examples:
 
 // 01-draw_pose.cpp
@@ -34,15 +33,9 @@ int main()
 #ifndef RVIZ_HPP_
 #define RVIZ_HPP_
 
-#include <cassert>
-#include <cstdint>
-#include <string>
-#include <utility>
 #include <vector>
-#include <cmath>
 #include <mutex>
 #include <unordered_map>
-#include <algorithm>
 #include <raylib.h>
 
 #define RVIZ_DEF_SINGLETON(classname)                         \
@@ -112,13 +105,9 @@ struct GridMap2d
 {
     float range_x[2];
     float range_y[2];
-    float res_x;
-    float res_y;
-    inline void add_occupy(float x, float y) { occupied_grid_.push_back({.x=x, .y=y}); }
-    inline void clear_occupies() { occupied_grid_.clear(); }
-private:
-    friend class Viz;
-    std::vector<Point2d> occupied_grid_;
+    int row;
+    int col;
+    std::vector<int> occupied_grid;
 }; // struct GridMap2d
 
 using PointICloud = std::vector<PointI>;
@@ -149,9 +138,9 @@ class Viz
     {
         float range_x[2];
         float range_y[2];
-        float res_x;
-        float res_y;
-        std::vector<int> occupied_grid_idx;
+        int row;
+        int col;
+        std::vector<int> occupied_grid;
     }; // struct DrawableMap
 
     struct DrawableMeshModel
@@ -193,12 +182,17 @@ private:
 #endif // RVIZ_HPP_
 
 
-#define RVIZ_IMPLEMENTATION // delete me
+// #define RVIZ_IMPLEMENTATION // delete me
 
 
 #ifdef RVIZ_IMPLEMENTATION
 #ifndef RVIZ_CPP_
 #define RVIZ_CPP_
+
+#include <cassert>
+#include <cmath>
+#include <iostream>
+#include <algorithm>
 
 #ifndef RVIZ_WIN_WIDTH
 #   define RVIZ_WIN_WIDTH 800
@@ -391,20 +385,21 @@ void Viz::render()
                     {
                         // Draw game grid
                         const auto map{it.second->map};
-                        for (float y = map->range_y[0]; y <= map->range_y[1]; y += map->res_y) {
-                            DrawLine3D({map->range_x[0], y, 0}, {map->range_x[1], y, 0}, GRAY);
+                        const auto res_x{(map->range_x[1] - map->range_x[0]) / map->col};
+                        const auto res_y{(map->range_y[1] - map->range_y[0]) / map->row};
+                        const auto half_cell_x{res_x / 2.0f};
+                        const auto half_cell_y{res_y / 2.0f};
+                        for (float y = map->range_y[0]; y <= map->range_y[1]; y += res_y) {
+                            DrawLine3D((Vector3){map->range_x[0], y, 0}, (Vector3){map->range_x[1], y, 0}, GRAY);
                         }
-                        for (float x = map->range_x[0]; x <= map->range_x[1]; x += map->res_x) {
-                            DrawLine3D({x, map->range_y[0], 0}, {x, map->range_y[1], 0}, GRAY);
+                        for (float x = map->range_x[0]; x <= map->range_x[1]; x += res_x) {
+                            DrawLine3D((Vector3){x, map->range_y[0], 0}, (Vector3){x, map->range_y[1], 0}, GRAY);
                         }
 
-                        const float half_cell_x{map->res_x / 2.0f};
-                        const float half_cell_y{map->res_y / 2.0f};
-                        const int row{static_cast<int>((map->range_x[1] - map->range_x[0]) / map->res_x)};
-                        for (auto idx : map->occupied_grid_idx) {
-                            const float x{map->range_x[0] + (idx % row) * map->res_x};
-                            const float y{map->range_y[1] - static_cast<int>(idx / row) * map->res_y};
-                            DrawCube({x + half_cell_x, y - half_cell_y, -0.01}, map->res_x, map->res_y, 0.001f, GRAY);
+                        for (auto idx : map->occupied_grid) {
+                            const float x{map->range_x[0] + (idx % map->col) * res_x};
+                            const float y{map->range_y[1] - static_cast<int>(idx / map->row) * res_y};
+                            DrawCube({x + half_cell_x, y - half_cell_y, -0.01}, res_x, res_y, 0.001f, GRAY);
                         }
                     } break;
                 default:
@@ -485,8 +480,8 @@ bool Viz::draw_gridmap2d(const std::string& topic, const GridMap2d& map)
         std::cerr << "Bad map range\n";
         return false;
     }
-    if(map.res_x <= 0 || map.res_y <= 0) {
-        std::cerr << "Bad map resolution\n";
+    if(map.col <= 0 || map.row <= 0) {
+        std::cerr << "Bad map size\n";
         return false;
     }
 
@@ -495,17 +490,13 @@ bool Viz::draw_gridmap2d(const std::string& topic, const GridMap2d& map)
     drawable_map->range_x[1] = -map.range_y[0];
     drawable_map->range_y[0] = map.range_x[0];
     drawable_map->range_y[1] = map.range_x[1];
-    drawable_map->res_x = map.res_y;
-    drawable_map->res_y = map.res_x;
+    drawable_map->row = map.row;
+    drawable_map->col = map.col;
 
-    const auto map_r{static_cast<int>((map.range_x[1] - map.range_x[0]) / map.res_x)};
-    const auto map_c{static_cast<int>((map.range_y[1] - map.range_y[0]) / map.res_y)};
-    for (const auto& ocp : map.occupied_grid_) {
-        if (ocp.x >= map.range_x[1] || ocp.x <= map.range_x[0]) continue;
-        if (ocp.y >= map.range_y[1] || ocp.y <= map.range_y[0]) continue;
-        const auto r{map_r - static_cast<int>((ocp.x - map.range_x[0]) / map.res_x) - 1};
-        const auto c{map_c - static_cast<int>((ocp.y - map.range_y[0]) / map.res_y) - 1};
-        drawable_map->occupied_grid_idx.push_back(r * map_c + c);
+    const auto num_grids{map.row * map.col};
+    for (const auto& ocp : map.occupied_grid) {
+        if (ocp >= num_grids) continue;
+        drawable_map->occupied_grid.push_back(ocp);
     }
     return true;
 }
