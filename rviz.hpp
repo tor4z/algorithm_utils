@@ -157,11 +157,11 @@ class Viz
         std::vector<int> occupied_grid;
     }; // struct DrawableMap
 
-    struct DrawableMeshModel
+    struct DrawablePointcloudModel
     {
         Mesh mesh;
         Model model;
-    }; // struct DrawableMeshModel
+    }; // struct DrawablePointcloudModel
 
     struct DrawableVehicleModel {
         Vector3 position;
@@ -177,7 +177,7 @@ class Viz
     struct Drawable
     {
         union {
-            DrawableMeshModel* mesh_model;
+            DrawablePointcloudModel* pointcloud_model;
             DrawableVehicleModel* vehicle_model;
             DrawablePose* pose;
             DrawableMap* map;
@@ -209,7 +209,7 @@ private:
 #endif // RVIZ_HPP_
 
 
-#define RVIZ_IMPLEMENTATION // delete me
+// #define RVIZ_IMPLEMENTATION // delete me
 
 
 #ifdef RVIZ_IMPLEMENTATION
@@ -303,10 +303,10 @@ Viz::~Viz()
         switch (it.second->type) 
         {
         case DT_MESH_MODEL:
-            delete [] it.second->mesh_model->mesh.colors;
-            delete [] it.second->mesh_model->mesh.vertices;
-            UnloadModel(it.second->mesh_model->model);
-            delete it.second->mesh_model;
+            delete [] it.second->pointcloud_model->mesh.colors;
+            delete [] it.second->pointcloud_model->mesh.vertices;
+            UnloadModel(it.second->pointcloud_model->model);
+            delete it.second->pointcloud_model;
             break;
         case DT_VEHICLE:
             delete it.second->vehicle_model;
@@ -404,7 +404,7 @@ void Viz::render()
                 switch (it.second->type) {
                 case DT_MESH_MODEL:
                     {
-                        DrawModelPoints(it.second->mesh_model->model, model_center_, 1.0f, WHITE);
+                        DrawModelPoints(it.second->pointcloud_model->model, model_center_, 1.0f, WHITE);
                     } break;
                 case DT_POSE:
                     {
@@ -466,21 +466,21 @@ void Viz::render()
 bool Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
 {
     auto drawable{get_drawable(topic)};
-    if (!drawable->mesh_model) drawable->mesh_model = new DrawableMeshModel;
-    set_pointcloud_mesh_buffer(pc.size(), drawable->mesh_model->mesh);
+    if (!drawable->pointcloud_model) drawable->pointcloud_model = new DrawablePointcloudModel;
+    set_pointcloud_mesh_buffer(pc.size(), drawable->pointcloud_model->mesh);
     for (size_t i = 0; i < pc.size(); ++i) {
         const auto& point{pc.at(i)};
-        drawable->mesh_model->mesh.vertices[i * 3 + 0] = point.y;
-        drawable->mesh_model->mesh.vertices[i * 3 + 1] = point.x;
-        drawable->mesh_model->mesh.vertices[i * 3 + 2] = point.z;
-        drawable->mesh_model->mesh.colors[i * 4 + 0] = static_cast<uint8_t>(std::clamp(point.r, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
-        drawable->mesh_model->mesh.colors[i * 4 + 1] = static_cast<uint8_t>(std::clamp(point.g, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
-        drawable->mesh_model->mesh.colors[i * 4 + 2] = static_cast<uint8_t>(std::clamp(point.b, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
-        drawable->mesh_model->mesh.colors[i * 4 + 3] = RVIZ_MAX_COLOR_VAL;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 0] = point.y;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 1] = point.x;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 2] = point.z;
+        drawable->pointcloud_model->mesh.colors[i * 4 + 0] = static_cast<uint8_t>(std::clamp(point.r, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
+        drawable->pointcloud_model->mesh.colors[i * 4 + 1] = static_cast<uint8_t>(std::clamp(point.g, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
+        drawable->pointcloud_model->mesh.colors[i * 4 + 2] = static_cast<uint8_t>(std::clamp(point.b, 0.0f, 1.0f) * RVIZ_MAX_COLOR_VAL);
+        drawable->pointcloud_model->mesh.colors[i * 4 + 3] = RVIZ_MAX_COLOR_VAL;
     }
 
-    UploadMesh(&drawable->mesh_model->mesh, true);
-    drawable->mesh_model->model = LoadModelFromMesh(drawable->mesh_model->mesh);
+    UploadMesh(&drawable->pointcloud_model->mesh, true);
+    drawable->pointcloud_model->model = LoadModelFromMesh(drawable->pointcloud_model->mesh);
     drawable->type = DT_MESH_MODEL;
     return true;
 }
@@ -488,23 +488,23 @@ bool Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
 bool Viz::draw_pointcloud(const std::string& topic, const PointICloud& pc)
 {
     auto drawable{get_drawable(topic)};
-    if (!drawable->mesh_model) drawable->mesh_model = new DrawableMeshModel;
-    set_pointcloud_mesh_buffer(pc.size(), drawable->mesh_model->mesh);
+    if (!drawable->pointcloud_model) drawable->pointcloud_model = new DrawablePointcloudModel;
+    set_pointcloud_mesh_buffer(pc.size(), drawable->pointcloud_model->mesh);
     Color color;
     for (size_t i = 0; i < pc.size(); ++i) {
         const auto& point{pc.at(i)};
         heatmap(point.i, color);
-        drawable->mesh_model->mesh.vertices[i * 3 + 0] = point.y;
-        drawable->mesh_model->mesh.vertices[i * 3 + 1] = point.x;
-        drawable->mesh_model->mesh.vertices[i * 3 + 2] = point.z;
-        drawable->mesh_model->mesh.colors[i * 4 + 0] = color.r;
-        drawable->mesh_model->mesh.colors[i * 4 + 1] = color.g;
-        drawable->mesh_model->mesh.colors[i * 4 + 2] = color.b;
-        drawable->mesh_model->mesh.colors[i * 4 + 3] = color.a;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 0] = point.y;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 1] = point.x;
+        drawable->pointcloud_model->mesh.vertices[i * 3 + 2] = point.z;
+        drawable->pointcloud_model->mesh.colors[i * 4 + 0] = color.r;
+        drawable->pointcloud_model->mesh.colors[i * 4 + 1] = color.g;
+        drawable->pointcloud_model->mesh.colors[i * 4 + 2] = color.b;
+        drawable->pointcloud_model->mesh.colors[i * 4 + 3] = color.a;
     }
 
-    UploadMesh(&drawable->mesh_model->mesh, true);
-    drawable->mesh_model->model = LoadModelFromMesh(drawable->mesh_model->mesh);
+    UploadMesh(&drawable->pointcloud_model->mesh, true);
+    drawable->pointcloud_model->model = LoadModelFromMesh(drawable->pointcloud_model->mesh);
     drawable->type = DT_MESH_MODEL;
     return true;
 }
