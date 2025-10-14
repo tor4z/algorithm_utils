@@ -110,6 +110,19 @@ struct GridMap2d
     std::vector<int> occupied_grid;
 }; // struct GridMap2d
 
+struct VehState2d
+{
+    float x;
+    float y;
+    float heading;
+    float steer_angle;
+    // vehicle parameter
+    float wheel_base;
+    float wheel_track;
+    float wheel_radius;
+    float wheel_width;
+}; // struct VehState2d
+
 using PointICloud = std::vector<PointI>;
 using PointRGBCloud = std::vector<PointRGB>;
 
@@ -124,6 +137,7 @@ class Viz
         DT_MESH_MODEL,
         DT_POSE,
         DT_MAP,
+        DT_VEHICLE,
     }; // enum DrawableType
 
     struct DrawablePose
@@ -149,10 +163,22 @@ class Viz
         Model model;
     }; // struct DrawableMeshModel
 
+    struct DrawableVehicleModel {
+        Vector3 position;
+        Model front_axle;
+        Model rear_axle;
+        Model chassis;
+        Model fr_wheel;
+        Model fl_wheel;
+        Model rr_wheel;
+        Model rl_wheel;
+    }; // struct VehicleModel
+
     struct Drawable
     {
         union {
             DrawableMeshModel* mesh_model;
+            DrawableVehicleModel* vehicle_model;
             DrawablePose* pose;
             DrawableMap* map;
         };
@@ -165,6 +191,7 @@ public:
     bool draw_pointcloud(const std::string& topic, const PointRGBCloud& pc);
     bool draw_gridmap2d(const std::string& topic, const GridMap2d& map);
     bool draw_pose(const std::string& topic, const Pose& pose);
+    bool draw_vehicle2d(const std::string& topic, const VehState2d& state);
     bool draw_image();
     void render();
     bool closed();
@@ -182,7 +209,7 @@ private:
 #endif // RVIZ_HPP_
 
 
-// #define RVIZ_IMPLEMENTATION // delete me
+#define RVIZ_IMPLEMENTATION // delete me
 
 
 #ifdef RVIZ_IMPLEMENTATION
@@ -193,6 +220,7 @@ private:
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <raymath.h>
 
 #ifndef RVIZ_WIN_WIDTH
 #   define RVIZ_WIN_WIDTH 800
@@ -279,6 +307,9 @@ Viz::~Viz()
             delete [] it.second->mesh_model->mesh.vertices;
             UnloadModel(it.second->mesh_model->model);
             delete it.second->mesh_model;
+            break;
+        case DT_VEHICLE:
+            delete it.second->vehicle_model;
             break;
         case DT_POSE:
             delete it.second->pose;
@@ -402,6 +433,17 @@ void Viz::render()
                             DrawCube({x + half_cell_x, y - half_cell_y, -0.01}, res_x, res_y, 0.001f, GRAY);
                         }
                     } break;
+                case DT_VEHICLE:
+                    {
+                        const auto vehicle{it.second->vehicle_model};
+                        DrawModel(vehicle->front_axle, vehicle->position, 1.0f, GRAY);
+                        DrawModel(vehicle->rear_axle, vehicle->position, 1.0f, GRAY);
+                        DrawModel(vehicle->chassis, vehicle->position, 1.0f, GREEN);
+                        DrawModel(vehicle->fr_wheel, vehicle->position, 1.0f, RED);
+                        DrawModel(vehicle->fl_wheel, vehicle->position, 1.0f, RED);
+                        DrawModel(vehicle->rr_wheel, vehicle->position, 1.0f, RED);
+                        DrawModel(vehicle->rl_wheel, vehicle->position, 1.0f, RED);
+                    } break;
                 default:
                     assert(false && "Unknown drawable type");
                 }
@@ -411,7 +453,7 @@ void Viz::render()
                 Vector3 x_end{.x=0.0f, .y=1.0f, .z=0.0f};
                 Vector3 y_end{.x=-1.0f, .y=0.0f, .z=0.0f};
                 Vector3 z_end{.x=0.0f, .y=0.0f, .z=1.0f};
-                DrawLine3D(start, x_end, RED);
+                DrawLine3D(start, x_end, RED); 
                 DrawLine3D(start, y_end, GREEN);
                 DrawLine3D(start, z_end, BLUE);
             }
@@ -529,6 +571,85 @@ bool Viz::draw_pose(const std::string& topic, const Pose& pose)
     drawable->pose->z_end.y = pose.x + cos_roll * sin_pitch * cos_yaw - sin_roll * sin_yaw;
     drawable->pose->z_end.z = pose.z + cos_roll * cos_pitch;
     drawable->type = DT_POSE;
+    return true;
+}
+
+bool Viz::draw_vehicle2d(const std::string& topic, const VehState2d& state)
+{
+    auto drawable{get_drawable(topic)};
+    std::lock_guard<std::mutex> guard{drawable->lock};
+
+    float steer_angle{state.steer_angle};
+    float heading{state.heading};
+    const float wheel_base{state.wheel_base};
+    const float wheel_track{state.wheel_track};
+    const float chassis_width{1.0f};
+    const float chassis_height{wheel_base};
+    const float chassis_length{0.2f};
+    const float axle_radius{0.2f};
+    const float axle_length{wheel_track};
+    const float wheel_radius{state.wheel_radius};
+    const float wheel_length{state.wheel_width};
+    const auto half_axle_length{axle_length / 2.0f};
+    const auto half_wheel_radius{wheel_radius / 2.0f};
+    const auto half_wheel_track{wheel_track / 2.0f};
+    const auto wheel_to_center{half_wheel_track - wheel_length / 2.0f};
+    const auto half_wheel_base{wheel_base / 2.0f};
+
+    if (!drawable->vehicle_model) {
+        drawable->vehicle_model = new DrawableVehicleModel;
+        drawable->vehicle_model->front_axle = LoadModelFromMesh(GenMeshCylinder(axle_radius, axle_length, 32));
+        drawable->vehicle_model->rear_axle = LoadModelFromMesh(GenMeshCylinder(axle_radius, axle_length, 32));
+        drawable->vehicle_model->chassis = LoadModelFromMesh(GenMeshCube(chassis_width, chassis_height, chassis_length));
+        drawable->vehicle_model->fr_wheel = LoadModelFromMesh(GenMeshCylinder(wheel_radius, wheel_length, 32));
+        drawable->vehicle_model->fl_wheel = LoadModelFromMesh(GenMeshCylinder(wheel_radius, wheel_length, 32));
+        drawable->vehicle_model->rr_wheel = LoadModelFromMesh(GenMeshCylinder(wheel_radius, wheel_length, 32));
+        drawable->vehicle_model->rl_wheel = LoadModelFromMesh(GenMeshCylinder(wheel_radius, wheel_length, 32));
+    }
+
+    drawable->vehicle_model->position.y = state.x;
+    drawable->vehicle_model->position.x = -state.y;
+    drawable->vehicle_model->position.z = half_wheel_radius;
+
+    const Vector3 front_axle_angle{.x = 0, .y = 0, .z = M_PI_2f + heading};
+    const Vector3 rear_axle_angle{.x = 0, .y = 0, .z = M_PI_2f + heading};
+    const Vector3 chassis_angle{.x = 0, .y = 0, .z = heading};
+    const Vector3 fr_wheel_angle{.x = 0, .y = 0, .z = -M_PI_2f + steer_angle + heading};
+    const Vector3 fl_wheel_angle{.x = 0, .y = 0, .z = M_PI_2f + steer_angle + heading};
+    const Vector3 rr_wheel_angle{.x = 0, .y = 0, .z = -M_PI_2f + heading};
+    const Vector3 rl_wheel_angle{.x = 0, .y = 0, .z = M_PI_2f + heading};
+
+    const auto sin_heading{std::sin(heading)};
+    const auto cos_heading{std::cos(heading)};
+    drawable->vehicle_model->front_axle.transform = MatrixRotateXYZ(front_axle_angle);
+    drawable->vehicle_model->front_axle.transform.m12 = cos_heading * half_axle_length - wheel_base * sin_heading;
+    drawable->vehicle_model->front_axle.transform.m13 = sin_heading * half_axle_length + wheel_base * cos_heading;
+    drawable->vehicle_model->front_axle.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->rear_axle.transform = MatrixRotateXYZ(rear_axle_angle);
+    drawable->vehicle_model->rear_axle.transform.m12 = cos_heading * half_axle_length;
+    drawable->vehicle_model->rear_axle.transform.m13 = sin_heading * half_axle_length;
+    drawable->vehicle_model->rear_axle.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->chassis.transform = MatrixRotateXYZ(chassis_angle);
+    drawable->vehicle_model->chassis.transform.m12 = -sin_heading * half_wheel_base;
+    drawable->vehicle_model->chassis.transform.m13 = cos_heading * half_wheel_base;
+    drawable->vehicle_model->chassis.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->fr_wheel.transform = MatrixRotateXYZ(fr_wheel_angle);
+    drawable->vehicle_model->fr_wheel.transform.m12 = cos_heading * wheel_to_center - wheel_base * sin_heading;
+    drawable->vehicle_model->fr_wheel.transform.m13 = sin_heading * wheel_to_center + wheel_base * cos_heading;
+    drawable->vehicle_model->fr_wheel.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->fl_wheel.transform = MatrixRotateXYZ(fl_wheel_angle);
+    drawable->vehicle_model->fl_wheel.transform.m12 = -cos_heading * wheel_to_center - wheel_base * sin_heading;
+    drawable->vehicle_model->fl_wheel.transform.m13 = -sin_heading * wheel_to_center + wheel_base * cos_heading;
+    drawable->vehicle_model->fl_wheel.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->rr_wheel.transform = MatrixRotateXYZ(rr_wheel_angle);
+    drawable->vehicle_model->rr_wheel.transform.m12 = cos_heading * wheel_to_center;
+    drawable->vehicle_model->rr_wheel.transform.m13 = sin_heading * wheel_to_center;
+    drawable->vehicle_model->rr_wheel.transform.m14 = half_wheel_radius;
+    drawable->vehicle_model->rl_wheel.transform = MatrixRotateXYZ(rl_wheel_angle);
+    drawable->vehicle_model->rl_wheel.transform.m12 = -cos_heading * wheel_to_center;
+    drawable->vehicle_model->rl_wheel.transform.m13 = -sin_heading * wheel_to_center;
+    drawable->vehicle_model->rl_wheel.transform.m14 = half_wheel_radius;
+    drawable->type = DT_VEHICLE;
     return true;
 }
 
