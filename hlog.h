@@ -124,11 +124,11 @@ struct hlog_LogBuff* hlog_get_log_buff(enum hlog_LogLevel log_level)
 #ifdef HLOG_LOG_PATH
     char str_time[HLOG_TIME_STR_LEN];
     time_t raw_time;
-    time(&raw_time);
-    strftime(str_time, HLOG_TIME_STR_LEN, "%Y%m%d_%H%M%S", localtime(&raw_time));
 
 #define HLOG_SET_LOG_FILE(log_buff)                                                         \
     if (log_buff.file[0] == '\0') {                                                         \
+        time(&raw_time);                                                                    \
+        strftime(str_time, HLOG_TIME_STR_LEN, "%Y%m%d_%H%M%S", localtime(&raw_time));       \
         snprintf(log_buff.file, HLOG_LOG_PATH_LEN, "%s/%s-%s-%d.log",                       \
             HLOG_LOG_PATH, hlog_log_level_name(log_buff.log_level), str_time, getpid());    \
     }
