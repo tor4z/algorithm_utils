@@ -59,18 +59,9 @@ private:                                                      \
 
 namespace rviz {
 
-struct Point2d
-{
-    float x;
-    float y;
-}; // struct Point2d
-
-struct Point3d
-{
-    float x;
-    float y;
-    float z;
-}; // struct Point3d
+using Point2f = Vector2;
+using Point3f = Vector3;
+using Point4f = Vector4;
 
 struct PointI
 {
@@ -138,6 +129,7 @@ class Viz
         DT_POSE,
         DT_MAP,
         DT_VEHICLE,
+        DT_TRJ,
     }; // enum DrawableType
 
     struct DrawablePose
@@ -163,6 +155,11 @@ class Viz
         Model model;
     }; // struct DrawablePointcloudModel
 
+    struct DrawableTrj2d
+    {
+        std::vector<Vector2> points;
+    }; // struct DrawableTrj2d
+
     struct DrawableVehicleModel {
         Vector3 position;
         Model front_axle;
@@ -181,6 +178,7 @@ class Viz
             DrawableVehicleModel* vehicle_model;
             DrawablePose* pose;
             DrawableMap* map;
+            DrawableTrj2d* trj2d;
         };
         DrawableType type;
         std::mutex lock;
@@ -192,6 +190,10 @@ public:
     bool draw_gridmap2d(const std::string& topic, const GridMap2d& map);
     bool draw_pose(const std::string& topic, const Pose& pose);
     bool draw_vehicle2d(const std::string& topic, const VehState2d& state);
+    bool draw_trj2d(const std::string& topic, const std::vector<float>& xs, const std::vector<float>& ys);
+    bool draw_trj2d(const std::string& topic, const std::vector<Point2f>& trj);
+    bool draw_trj2d_point(const std::string& topic, const Point2f& point);
+    bool draw_trj2d_point(const std::string& topic, const float x, const float y);
     bool draw_image();
     void render();
     bool closed();
@@ -316,6 +318,9 @@ Viz::~Viz()
             break;
         case DT_MAP:
             delete it.second->map;
+            break;
+        case DT_TRJ:
+            delete it.second->trj2d;
             break;
         default:
             assert(false && "Unknown drawable type");
@@ -443,6 +448,12 @@ void Viz::render()
                         DrawModel(vehicle->fl_wheel, vehicle->position, 1.0f, RED);
                         DrawModel(vehicle->rr_wheel, vehicle->position, 1.0f, RED);
                         DrawModel(vehicle->rl_wheel, vehicle->position, 1.0f, RED);
+                    } break;
+                case
+                DT_TRJ:
+                    {
+                        const auto trj{it.second->trj2d};
+                        DrawLineStrip(trj->points.data(), trj->points.size(), WHITE);
                     } break;
                 default:
                     assert(false && "Unknown drawable type");
@@ -651,6 +662,63 @@ bool Viz::draw_vehicle2d(const std::string& topic, const VehState2d& state)
     drawable->vehicle_model->rl_wheel.transform.m14 = half_wheel_radius;
     drawable->type = DT_VEHICLE;
     return true;
+}
+
+bool Viz::draw_trj2d(const std::string& topic, const std::vector<float>& xs, const std::vector<float>& ys)
+{
+    auto drawable{get_drawable(topic)};
+    std::lock_guard<std::mutex> guard{drawable->lock};
+    drawable->type = DT_TRJ;
+    if (!drawable->trj2d) {
+        drawable->trj2d = new DrawableTrj2d;
+    }
+
+    if (xs.empty() || ys.empty()) {
+        return false;
+    }
+    if (xs.size() != ys.size()) {
+        return false;
+    }
+
+    drawable->trj2d->points.resize(xs.size());
+    for (size_t i = 0; i < xs.size(); ++i) {
+        drawable->trj2d->points.at(i).x = -ys.at(i);
+        drawable->trj2d->points.at(i).y = xs.at(i);
+    }
+    return true;
+}
+
+bool Viz::draw_trj2d(const std::string& topic, const std::vector<Point2f>& trj)
+{
+    auto drawable{get_drawable(topic)};
+    std::lock_guard<std::mutex> guard{drawable->lock};
+    drawable->type = DT_TRJ;
+    if (!drawable->trj2d) {
+        drawable->trj2d = new DrawableTrj2d;
+    }
+    drawable->trj2d->points.resize(trj.size());
+    for (size_t i = 0; i < trj.size(); ++i) {
+        drawable->trj2d->points.at(i).x = -trj.at(i).y;
+        drawable->trj2d->points.at(i).y = trj.at(i).x;
+    }
+    return true;
+}
+
+bool Viz::draw_trj2d_point(const std::string& topic, const Point2f& point)
+{
+    auto drawable{get_drawable(topic)};
+    std::lock_guard<std::mutex> guard{drawable->lock};
+    drawable->type = DT_TRJ;
+    if (!drawable->trj2d) {
+        drawable->trj2d = new DrawableTrj2d;
+    }
+    drawable->trj2d->points.push_back((Vector2){.x=-point.y, .y=point.x});
+    return true;
+}
+
+bool Viz::draw_trj2d_point(const std::string& topic, const float x, const float y)
+{
+    return draw_trj2d_point(topic, (Vector2){.x=x, .y=y});
 }
 
 bool Viz::draw_image()
