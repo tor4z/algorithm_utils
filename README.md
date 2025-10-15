@@ -7,10 +7,11 @@
 | ------ | ----- |
 | bicycle.hpp | kinematic bicycle model |
 | fitty.hpp | line fitting lib |
-| flags.hpp | command line argument parse lib |
-| gnuplot.hpp | gnuplot wrapper for c++ |
-| htest.hpp | unit test lib for c++ |
 | lie.hpp | lie theory lib |
 | lina.hpp | linear algebra lib |
 | qs.hpp | quadratic problem solver  |
+| htest.hpp | unit test lib for c++ |
+| hlog.h | a log lib  |
+| flags.hpp | command line argument parse lib |
+| gnuplot.hpp | gnuplot wrapper for c++ |
 | rviz.hpp | a raylib wrapper, simple version `ROS rviz` |
