@@ -55,7 +55,7 @@ void hlog_flush_all();
 
 #endif // H_LOG_H_
 
-// #define HLOG_IMPLEMENTATION
+// #define HLOG_IMPLEMENTATION // delete me
 
 #ifdef HLOG_IMPLEMENTATION
 #ifndef HLOG_C_
@@ -67,7 +67,7 @@ void hlog_flush_all();
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-
+#include <pthread.h>
 
 #ifndef HLOG_BUFF_SIZE
 #   define HLOG_BUFF_SIZE 2048
@@ -86,6 +86,7 @@ void hlog_flush_all();
 #endif // LOG_MIN_LOG_LEVEL
 
 struct hlog_LogBuff {
+    pthread_mutex_t mutex;
     int idx;
     enum hlog_LogLevel log_level;
     char file[HLOG_LOG_PATH_LEN];
@@ -208,10 +209,11 @@ void hlog_append(const char* file_path, int line, enum hlog_LogLevel log_level, 
     int n;
     int should_re_append;
 
-    if (log_level <= LOG_MIN_LOG_LEVEL && log_level != HLOG_FATAL) {
+    if (log_level < LOG_MIN_LOG_LEVEL && log_level != HLOG_FATAL) {
         return;
     }
 
+    pthread_mutex_lock(&log_buff->mutex);
 #define HLOG_SNPRINTF(...)                                                  \
     do {                                                                    \
         int max_len = HLOG_BUFF_SIZE - log_buff->idx;                       \
@@ -268,6 +270,7 @@ void hlog_append(const char* file_path, int line, enum hlog_LogLevel log_level, 
         exit(1);
     }
 #undef HLOG_SNPRINTF
+    pthread_mutex_unlock(&log_buff->mutex);
 }
 
 #endif // HLOG_C_
