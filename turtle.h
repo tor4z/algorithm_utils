@@ -97,8 +97,8 @@ void turtle_forward(Turtle* turtle, float s)
     assert(turtle != NULL);
     if (s == 0) return;
 
-    const float sin_h = sin(turtle->heading);
-    const float cos_h = cos(turtle->heading);
+    const float sin_h = sinf(turtle->heading);
+    const float cos_h = cosf(turtle->heading);
     const int num_segs = (int)(s / TUR_STEP_SIZE);
     float x = turtle->x;
     float y = turtle->y;
@@ -131,11 +131,11 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     const float rad_sign = rad > 0.0f ? 1.0f : -1.0f;
     const float r_sign = r > 0.0f ? 1.0f : -1.0f;
-    const float c_x = turtle->x - r * sin(turtle->heading);
-    const float c_y = turtle->y + r * cos(turtle->heading);
-    const float rad_step_size = r_sign * rad_sign * TUR_STEP_SIZE / r;
+    const float c_x = turtle->x - r * sinf(turtle->heading);
+    const float c_y = turtle->y + r * cosf(turtle->heading);
+    const float rad_step_size = rad_sign * TUR_STEP_SIZE / r;
     const int num_steps = tur_absf(rad / rad_step_size);
-    const float last_step_size = rad - num_steps * rad_step_size;
+    const float last_step_size = rad - num_steps * rad_step_size * r_sign;
 
     float x = turtle->x;
     float y = turtle->y;
@@ -146,8 +146,8 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     for (int i = 0; i < num_steps; ++i) {
         angle += rad_step_size;
-        x = tur_absf(r) * cos(angle);
-        y = tur_absf(r) * sin(angle);
+        x = tur_absf(r) * cosf(angle);
+        y = tur_absf(r) * sinf(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
@@ -155,15 +155,15 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     if (tur_absf(last_step_size) > 0) {
         angle += last_step_size;
-        x = tur_absf(r) * cos(angle);
-        y = tur_absf(r) * sin(angle);
+        x = tur_absf(r) * cosf(angle);
+        y = tur_absf(r) * sinf(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
     }
-    turtle->x = x + c_x;
-    turtle->y = y + c_y;
-    turtle->heading = tur_norm_2pif(turtle->heading + rad);
+    turtle->x = p.x;
+    turtle->y = p.y;
+    turtle->heading = tur_norm_2pif(turtle->heading + rad * r_sign);
 }
 
 #endif // TURTLE_C_
