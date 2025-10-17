@@ -20,6 +20,10 @@ int main()
 
 #endif // examples
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef H_LOG_H_
 #define H_LOG_H_
 
@@ -275,3 +279,7 @@ void hlog_append(const char* file_path, int line, enum hlog_LogLevel log_level, 
 
 #endif // HLOG_C_
 #endif // HLOG_IMPLEMENTATION
+
+#ifdef __cplusplus
+}
+#endif
