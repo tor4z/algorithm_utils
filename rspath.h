@@ -28,12 +28,17 @@ typedef struct {
     RsSegPattern patterns[RS_NUM_PATTERNS];
 } RsPath;
 
+// pp 190. eq. 8.1
 bool rs_path_lpsplp(float x, float y, float phi, RsPath* path);
+// pp 190. eq. 8.2
+bool rs_path_lpsprp(float x, float y, float phi, RsPath* path);
+// pp 190. eq. 8.3
+bool rs_path_lprmlp(float x, float y, float phi, RsPath* path);
 
 #endif // RS_PATH_H_
 
 
-// #define RS_PATH_IMPLEMENTATION
+// #define RS_PATH_IMPLEMENTATION // delete me.
 
 #ifdef RS_PATH_IMPLEMENTATION
 #ifndef RS_PATH_C_
@@ -41,31 +46,20 @@ bool rs_path_lpsplp(float x, float y, float phi, RsPath* path);
 
 #include <math.h>
 
-static inline float rs_pow2f(float x)
-{
-    return x * x;
-}
-
-static inline float rs_pow3f(float x)
-{
-    return x * x * x;
-}
-
-static inline float rs_absf(float x)
-{
-    return x > 0.0f ? x : -x;
-}
+static inline float rs_pow2f(float x) { return x * x; }
+static inline float rs_pow3f(float x) { return x * x * x; }
+static inline float rs_absf(float x) { return x > 0.0f ? x : -x; }
 
 static inline float rs_norm_2pif(float x)
 {
-    static const float DB_PIf = 2.0f * M_PI;
+    static const float db_pif = 2.0f * M_PI;
 
-    while (x > M_PI) { x -= DB_PIf; }
-    while (x < -M_PI) { x += DB_PIf; }
+    while (x > M_PI) { x -= db_pif; }
+    while (x < -M_PI) { x += db_pif; }
     return x;
 }
 
-bool rs_to_polar(float x, float y, float* r, float* theta)
+static inline bool rs_to_polar(float x, float y, float* r, float* theta)
 {
     if (!r || !theta) return false;
     *r = sqrtf(rs_pow2f(x) + rs_pow2f(y));
@@ -73,20 +67,69 @@ bool rs_to_polar(float x, float y, float* r, float* theta)
     return true;
 }
 
-// pp 190. eq. 8.1
 bool rs_path_lpsplp(float x, float y, float phi, RsPath* path)
 {
     if (!path) return false;
 
     float u;
     float t;
-    float v;
-    rs_to_polar(x - sin(phi), y - 1.0f + cos(phi) , &u, &t);
-    v = rs_norm_2pif(phi - t);
+    rs_to_polar(x - sinf(phi), y - 1.0f + cosf(phi) , &u, &t);
+    const float v = rs_norm_2pif(phi - t);
+
     path->length = rs_absf(u) + rs_absf(t) + rs_absf(v);
     path->num_segs = 3;
     path->patterns[0] = SP_L;
     path->patterns[1] = SP_S;
+    path->patterns[2] = SP_L;
+    path->pattern_val[0] = t;
+    path->pattern_val[1] = u;
+    path->pattern_val[2] = v;
+    return true;
+}
+
+bool rs_path_lpsprp(float x, float y, float phi, RsPath* path)
+{
+    if (!path) return false;
+
+    float u1;
+    float t1;
+    rs_to_polar(x + sinf(phi), y - 1.0f - cosf(phi) , &u1, &t1);
+    const float u_2 = rs_pow2f(u1) - 4.0f;
+    if (u_2 < 0.0f) { return false; }
+    const float u = sqrtf(u_2);
+    const float t = rs_norm_2pif(t1 + atan2f(u, 2.0f));
+    const float v = rs_norm_2pif(t - phi);
+
+    path->length = rs_absf(u) + rs_absf(t) + rs_absf(v);
+    path->num_segs = 3;
+    path->patterns[0] = SP_L;
+    path->patterns[1] = SP_S;
+    path->patterns[2] = SP_R;
+    path->pattern_val[0] = t;
+    path->pattern_val[1] = u;
+    path->pattern_val[2] = v;
+    return true;
+}
+
+bool rs_path_lprmlp(float x, float y, float phi, RsPath* path)
+{
+    if (!path) return false;
+
+    float u1;
+    float theta;
+    const float xi = x - sinf(phi);
+    const float eta = y - 1.0f + cosf(phi);
+    rs_to_polar(xi, eta, &u1, &theta);
+    if (u1 > 4.0f) return false;
+    const float a = acosf(u1 / 4.0f);
+    const float t = rs_norm_2pif(a + theta + M_PI_2);
+    const float u = rs_norm_2pif(M_PI - 2.0f * a);
+    const float v = rs_norm_2pif(phi - t - u);
+
+    path->length = rs_absf(u) + rs_absf(t) + rs_absf(v);
+    path->num_segs = 3;
+    path->patterns[0] = SP_L;
+    path->patterns[1] = SP_R;
     path->patterns[2] = SP_L;
     path->pattern_val[0] = t;
     path->pattern_val[1] = u;
