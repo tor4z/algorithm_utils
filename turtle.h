@@ -1,3 +1,7 @@
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef TURTLE_H_
 #define TURTLE_H_
 
@@ -24,16 +28,18 @@ typedef struct {
 } Turtle;
 
 void turtle_forward(Turtle* turtle, float s);
+void turtle_arc(Turtle* turtle, float r, float rad);
 
 #endif // TURTLE_H_
 
 
-#define TURTLE_IMPLEMENTATION // delete me.
+// #define TURTLE_IMPLEMENTATION // delete me.
 
 #ifdef TURTLE_IMPLEMENTATION
 #ifndef TURTLE_C_
 #define TURTLE_C_
 
+#include <stdio.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <math.h>
@@ -69,6 +75,19 @@ void turtle_forward(Turtle* turtle, float s);
         (da)->cap = 0;                                                                  \
     } while (0)
 
+static inline float tur_absf(float x)
+{
+    return x > 0.0f ? x : -x;
+}
+
+static inline float tur_norm_2pif(float x)
+{
+    static const float db_pif = 2.0f * M_PI;
+    while (x > M_PI) { x -= db_pif; }
+    while (x < -M_PI) { x += db_pif; }
+    return x;
+}
+
 void turtle_forward(Turtle* turtle, float s)
 {
     assert(turtle != NULL);
@@ -89,10 +108,10 @@ void turtle_forward(Turtle* turtle, float s)
         tur_da_append(&(turtle->trj), p);
     }
 
-    float laste_seg;
-    if ((laste_seg = s - num_segs * TUR_STEP_SIZE) > 0) {
-        x += cos_h * laste_seg;
-        y += sin_h * laste_seg;
+    float last_seg;
+    if ((last_seg = s - num_segs * TUR_STEP_SIZE) > 0) {
+        x += cos_h * last_seg;
+        y += sin_h * last_seg;
         p.x = x;
         p.y = y;
         tur_da_append(&(turtle->trj), p);
@@ -101,5 +120,50 @@ void turtle_forward(Turtle* turtle, float s)
     turtle->y = y;
 }
 
+void turtle_arc(Turtle* turtle, float r, float rad)
+{
+    assert(turtle != NULL);
+    if (r <= 0) return;
+
+    const float rad_sign = rad > 0.0f ? 1.0f : -1.0f;
+    const float c_x = turtle->x - r * sin(turtle->heading);
+    const float c_y = turtle->y + r * cos(turtle->heading);
+    const float rad_step_size = rad_sign * TUR_STEP_SIZE / r;
+    const int num_steps = tur_absf(rad / rad_step_size);
+    const float last_step_size = rad - num_steps * rad_step_size;
+
+    float x = turtle->x;
+    float y = turtle->y;
+    struct tur_point p;
+    const float x_rel = x - c_x;
+    const float y_rel = y - c_y;
+    float angle = atan2(y_rel, x_rel);
+
+    for (int i = 0; i < num_steps; ++i) {
+        angle += rad_step_size;
+        x = r * cos(angle);
+        y = r * sin(angle);
+        p.x = x + c_x;
+        p.y = y + c_y;
+        tur_da_append(&(turtle->trj), p);
+    }
+
+    if (tur_absf(last_step_size) > 0) {
+        angle += last_step_size;
+        x = r * cos(angle);
+        y = r * sin(angle);
+        p.x = x + c_x;
+        p.y = y + c_y;
+        tur_da_append(&(turtle->trj), p);
+    }
+    turtle->x = x + c_x;
+    turtle->y = y + c_y;
+    turtle->heading = tur_norm_2pif(turtle->heading + rad);
+}
+
 #endif // TURTLE_C_
 #endif // TURTLE_IMPLEMENTATION
+
+#ifdef __cplusplus
+}
+#endif
