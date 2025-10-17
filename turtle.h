@@ -48,6 +48,10 @@ void turtle_arc(Turtle* turtle, float r, float rad);
 #   define TUR_DA_INIT_DA_CAP 16
 #endif // TUR_DA_INIT_DA_CAP
 
+#ifndef TUR_EPSf
+#   define TUR_EPSf 1.0e-4f
+#endif // TUR_EPSf
+
 #define tur_da_append(da, item)                                                         \
     do {                                                                                \
         if (!(da)->items) {                                                             \
@@ -123,12 +127,13 @@ void turtle_forward(Turtle* turtle, float s)
 void turtle_arc(Turtle* turtle, float r, float rad)
 {
     assert(turtle != NULL);
-    if (r <= 0) return;
+    if (tur_absf(r) < TUR_EPSf) return;
 
     const float rad_sign = rad > 0.0f ? 1.0f : -1.0f;
+    const float r_sign = r > 0.0f ? 1.0f : -1.0f;
     const float c_x = turtle->x - r * sin(turtle->heading);
     const float c_y = turtle->y + r * cos(turtle->heading);
-    const float rad_step_size = rad_sign * TUR_STEP_SIZE / r;
+    const float rad_step_size = r_sign * rad_sign * TUR_STEP_SIZE / r;
     const int num_steps = tur_absf(rad / rad_step_size);
     const float last_step_size = rad - num_steps * rad_step_size;
 
@@ -141,8 +146,8 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     for (int i = 0; i < num_steps; ++i) {
         angle += rad_step_size;
-        x = r * cos(angle);
-        y = r * sin(angle);
+        x = tur_absf(r) * cos(angle);
+        y = tur_absf(r) * sin(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
@@ -150,8 +155,8 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     if (tur_absf(last_step_size) > 0) {
         angle += last_step_size;
-        x = r * cos(angle);
-        y = r * sin(angle);
+        x = tur_absf(r) * cos(angle);
+        y = tur_absf(r) * sin(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
