@@ -69,6 +69,13 @@ void turtle_arc(Turtle* turtle, float r, float rad);
         (da)->size = 0;                                                                 \
     } while (0)
 
+#define tur_da_reserve(da, target_cap)                                                  \
+    do {                                                                                \
+        if ((da)->cap < target_cap) {                                                   \
+            (da)->items = realloc((da)->items, target_cap * sizeof((da)->items[0]))      \
+        }                                                                               \
+    } while (0)
+
 #define tur_da_free(da)                                                                 \
     do {                                                                                \
         if ((da)->items) {                                                              \
@@ -127,8 +134,9 @@ void turtle_forward(Turtle* turtle, float s)
 void turtle_arc(Turtle* turtle, float r, float rad)
 {
     assert(turtle != NULL);
-    if (tur_absf(r) < TUR_EPSf) return;
 
+    const float abs_r = tur_absf(r);
+    if (tur_absf(r) < TUR_EPSf) return;
     const float rad_sign = rad > 0.0f ? 1.0f : -1.0f;
     const float r_sign = r > 0.0f ? 1.0f : -1.0f;
     const float c_x = turtle->x - r * sinf(turtle->heading);
@@ -146,8 +154,8 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     for (int i = 0; i < num_steps; ++i) {
         angle += rad_step_size;
-        x = tur_absf(r) * cosf(angle);
-        y = tur_absf(r) * sinf(angle);
+        x = abs_r * cosf(angle);
+        y = abs_r * sinf(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
@@ -155,8 +163,8 @@ void turtle_arc(Turtle* turtle, float r, float rad)
 
     if (tur_absf(last_step_size) > 0) {
         angle += last_step_size;
-        x = tur_absf(r) * cosf(angle);
-        y = tur_absf(r) * sinf(angle);
+        x = abs_r * cosf(angle);
+        y = abs_r * sinf(angle);
         p.x = x + c_x;
         p.y = y + c_y;
         tur_da_append(&(turtle->trj), p);
