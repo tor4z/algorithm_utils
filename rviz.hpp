@@ -130,6 +130,7 @@ class Viz
         DT_MAP,
         DT_VEHICLE,
         DT_TRJ,
+        DT_LINE_SEGS,
     }; // enum DrawableType
 
     struct DrawablePose
@@ -171,6 +172,14 @@ class Viz
         Model rl_wheel;
     }; // struct VehicleModel
 
+    struct DrawableLineSegs {
+        struct Seg {
+            Vector3 a;
+            Vector3 b;
+        }; // struct Seg
+        std::vector<Seg> segs;
+    }; // struct DrawableLineSegs
+
     struct Drawable
     {
         union {
@@ -179,6 +188,7 @@ class Viz
             DrawablePose* pose;
             DrawableMap* map;
             DrawableTrj2d* trj2d;
+            DrawableLineSegs* line_segs;
         };
         DrawableType type;
         std::mutex lock;
@@ -192,8 +202,10 @@ public:
     bool draw_vehicle2d(const std::string& topic, const VehState2d& state);
     bool draw_trj2d(const std::string& topic, const std::vector<float>& xs, const std::vector<float>& ys);
     bool draw_trj2d(const std::string& topic, const std::vector<Point2f>& trj);
-    bool draw_trj2d_point(const std::string& topic, const Point2f& point);
-    bool draw_trj2d_point(const std::string& topic, const float x, const float y);
+    bool draw_trj2d_point_(const std::string& topic, const Point2f& point);
+    bool draw_trj2d_point_(const std::string& topic, const float x, const float y);
+    bool draw_line_segment(const std::string& topic, const Point2f& a, const Point2f& b);
+    bool draw_line_segment_(const std::string& topic, const Point2f& a, const Point2f& b);
     bool draw_image();
     void render();
     bool closed();
@@ -205,6 +217,14 @@ private:
     Vector3 model_center_;
     std::unordered_map<std::string, Drawable*> drawables_;
 }; // struct Viz
+
+#define RVIZ_RENDER_UNTIL_CLOSED()          \
+    do {                                    \
+        auto viz{rviz::Viz::instance()};    \
+        while (!viz->closed()) {            \
+            viz->render();                  \
+        }                                   \
+    } while(0)
 
 } // namespace rviz
 
@@ -321,6 +341,9 @@ Viz::~Viz()
             break;
         case DT_TRJ:
             delete it.second->trj2d;
+            break;
+        case DT_LINE_SEGS:
+            delete it.second->line_segs;
             break;
         default:
             assert(false && "Unknown drawable type");
@@ -449,11 +472,17 @@ void Viz::render()
                         DrawModel(vehicle->rr_wheel, vehicle->position, 1.0f, RED);
                         DrawModel(vehicle->rl_wheel, vehicle->position, 1.0f, RED);
                     } break;
-                case
-                DT_TRJ:
+                case DT_TRJ:
                     {
                         const auto trj{it.second->trj2d};
                         DrawLineStrip(trj->points.data(), trj->points.size(), WHITE);
+                    } break;
+                case DT_LINE_SEGS:
+                    {
+                        const auto lines{it.second->line_segs};
+                        for (const auto& it: lines->segs) {
+                            DrawLine3D(it.a, it.b, RED); 
+                        }
                     } break;
                 default:
                     assert(false && "Unknown drawable type");
@@ -704,7 +733,7 @@ bool Viz::draw_trj2d(const std::string& topic, const std::vector<Point2f>& trj)
     return true;
 }
 
-bool Viz::draw_trj2d_point(const std::string& topic, const Point2f& point)
+bool Viz::draw_trj2d_point_(const std::string& topic, const Point2f& point)
 {
     auto drawable{get_drawable(topic)};
     std::lock_guard<std::mutex> guard{drawable->lock};
@@ -716,14 +745,38 @@ bool Viz::draw_trj2d_point(const std::string& topic, const Point2f& point)
     return true;
 }
 
-bool Viz::draw_trj2d_point(const std::string& topic, const float x, const float y)
+bool Viz::draw_trj2d_point_(const std::string& topic, const float x, const float y)
 {
-    return draw_trj2d_point(topic, (Vector2){.x=x, .y=y});
+    return draw_trj2d_point_(topic, (Vector2){.x=x, .y=y});
+}
+
+bool Viz::draw_line_segment(const std::string& topic, const Point2f& a, const Point2f& b)
+{
+    return false;
+}
+
+bool Viz::draw_line_segment_(const std::string& topic, const Point2f& a, const Point2f& b)
+{
+    auto drawable{get_drawable(topic)};
+    std::lock_guard<std::mutex> guard{drawable->lock};
+    drawable->type = DT_LINE_SEGS;
+    if (!drawable->line_segs) {
+        drawable->line_segs = new DrawableLineSegs;
+    }
+    DrawableLineSegs::Seg seg;
+    seg.a.x = -a.y;
+    seg.a.y = a.x;
+    seg.a.z = 0.0f;
+    seg.b.x = -b.y;
+    seg.b.y = b.x;
+    seg.b.z = 0.0f;
+    drawable->line_segs->segs.push_back(seg);
+    return true;
 }
 
 bool Viz::draw_image()
 {
-    return true;
+    return false;
 }
 
 } // namespace rviz
