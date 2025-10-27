@@ -164,13 +164,13 @@ void Simulator::render()
 
     UpdateCamera(&camera_, CAMERA_PERSPECTIVE);
     BeginDrawing();
-        ClearBackground(BLACK);
+        ClearBackground(GRAY);
         BeginMode3D(camera_);
             {
                 // draw map
                 map_to_mesh_model();
                 DrawModel(map_.road_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, DARKGRAY);
-                DrawModel(map_.edge_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, GRAY);
+                DrawModel(map_.edge_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, BLACK);
                 DrawModel(map_.lanelet_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, YELLOW);
             }
             DrawGrid(10, 1.0f);
