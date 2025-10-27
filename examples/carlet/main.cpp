@@ -1,8 +1,6 @@
-#include <cassert>
-#include <cstddef>
-#include <cstring>
-#include <iostream>
+#include <cstdlib>
 #include <mutex>
+#include <cassert>
 #include <ostream>
 #include <raylib.h>
 #include <rlgl.h>
@@ -25,17 +23,21 @@
 #   define CARLET_ROAD_EDGE_WIDTH   0.1f   // meter, which is 1cm
 #endif // CARLET_ROAD_EDGE_WIDTH
 
-#ifndef CARLET_ROAD_EDGE_COLOR
-#   define CARLET_ROAD_EDGE_COLOR   GRAY
-#endif // CARLET_ROAD_EDGE_COLOR
-
 #ifndef CARLET_LANELET_WIDTH
 #   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 1cm
 #endif // CARLET_LANELET_WIDTH
 
-#ifndef CARLET_LANELET_COLOR
-#   define CARLET_LANELET_COLOR     WHITE
-#endif // CARLET_LANELET_COLOR
+#ifndef CARLET_DEF_VEH_LEN
+#   define CARLET_DEF_VEH_LEN       4.2f
+#endif // CARLET_DEF_VEH_LEN
+
+#ifndef CARLET_DEF_VEH_WIDTH
+#   define CARLET_DEF_VEH_WIDTH     1.98f
+#endif // CARLET_DEF_VEH_WIDTH
+
+#ifndef CARLET_DEF_VEH_HEIGHT
+#   define CARLET_DEF_VEH_HEIGHT     1.6f
+#endif // CARLET_DEF_VEH_HEIGHT
 
 struct Road
 {
@@ -69,6 +71,28 @@ struct Map
     Model lanelet_model;
 }; // struct Map
 
+struct Object
+{
+    Model model;
+    Color color;
+}; // struct Object
+
+struct Veh: public Object
+{
+    float spd;
+    float accel;
+}; // struct Veh
+
+struct ControllableVeh : public Veh
+{
+    void act(float steer, float accel);
+}; // struct ControllableVehicle
+
+struct SelfDrivingVeh : public Veh
+{
+
+}; // struct ControllableVehicle
+
 #define CARLET_DEF_SINGLETON(classname)                           \
     public:                                                       \
         static inline classname* instance()                       \
@@ -97,12 +121,17 @@ public:
     bool step(float dt);
     void render();
 
+    int create_ctrl_veh();
+    ControllableVeh& get_ctrl_veh(int id);
+    void create_random_vehs(int n);
     inline Map& map() { return map_; }
 private:
     Simulator();
     void map_to_mesh_model();
 
     Map map_;
+    // std::vector<SelfDrivingVeh> sd_vehs_;
+    std::vector<ControllableVeh> ctrl_vehs_;
     Camera3D camera_;
 }; // class Simulator
 
@@ -115,6 +144,19 @@ inline T max(T a, T b) { return a > b ? a : b; }
 template<typename T>
 inline T clamp(T v, T low, T high) { return v > high ? high : v < low ? low : v; }
 
+static const Color VEH_COLORS[]{
+    YELLOW, GOLD, ORANGE, PINK, RED, MAROON,
+    GREEN, LIME, DARKGREEN, SKYBLUE, BLUE, DARKBLUE, PURPLE,
+    VIOLET, DARKPURPLE, BEIGE, BROWN, DARKBROWN, MAGENTA,
+    RAYWHITE
+};
+
+inline const Color& random_color()
+{
+    constexpr auto num_colors{sizeof(VEH_COLORS) / sizeof(VEH_COLORS[0])};
+    return VEH_COLORS[rand() % num_colors];
+}
+
 inline void to_raylib_mesh3(float* vec)
 {
     const auto x{vec[0]};
@@ -125,14 +167,9 @@ inline void to_raylib_mesh3(float* vec)
     vec[2] = -x;
 }
 
-inline void print3(float* vec)
+inline Vector3 to_raylib(const Vector3& vec)
 {
-    std::cout << vec[0] << ", " << vec[1] << ", " << vec[2] << "\n";
-}
-
-inline void print3(unsigned short* vec)
-{
-    std::cout << vec[0] << ", " << vec[1] << ", " << vec[2] << "\n";
+    return Vector3{.x = -vec.y, .y = vec.x, .z = vec.z};
 }
 
 std::ostream& operator<<(std::ostream& os, const Vector2& vec)
@@ -162,6 +199,7 @@ void Simulator::render()
     camera_.fovy += GetMouseWheelMove() * -5;
     camera_.fovy = clamp(camera_.fovy, 0.0f, 170.0f);
 
+    const Vector3 zero_vec{0};
     UpdateCamera(&camera_, CAMERA_PERSPECTIVE);
     BeginDrawing();
         ClearBackground(GRAY);
@@ -169,9 +207,16 @@ void Simulator::render()
             {
                 // draw map
                 map_to_mesh_model();
-                DrawModel(map_.road_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, DARKGRAY);
-                DrawModel(map_.edge_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, BLACK);
-                DrawModel(map_.lanelet_model, Vector3{.x=0.0f, .y=0.0f, .z=0.0f}, 1.0f, YELLOW);
+                DrawModel(map_.road_model, zero_vec, 1.0f, DARKGRAY);
+                DrawModel(map_.edge_model, zero_vec, 1.0f, BLACK);
+                DrawModel(map_.lanelet_model, zero_vec, 1.0f, YELLOW);
+            }
+            {
+                // draw vehicle
+                for (const auto& veh: ctrl_vehs_) {
+                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
+                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
+                }
             }
             DrawGrid(10, 1.0f);
         EndMode3D();
@@ -374,6 +419,31 @@ Simulator::Simulator()
     camera_.projection = CAMERA_PERSPECTIVE;                        // Camera mode type
 }
 
+int Simulator::create_ctrl_veh()
+{
+    ControllableVeh veh{0};
+    veh.color = random_color();
+    auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
+    UploadMesh(&mesh, true);
+    veh.model = LoadModelFromMesh(mesh);
+    veh.model.transform.m12 = 0.0f;
+    veh.model.transform.m13 = 0.0f;
+    veh.model.transform.m14 = 0.0f;
+
+    ctrl_vehs_.push_back(veh);
+    return ctrl_vehs_.size() - 1;
+}
+
+ControllableVeh& Simulator::get_ctrl_veh(int id)
+{
+    assert(id >= 0 || id < ctrl_vehs_.size());
+    return ctrl_vehs_.at(id);
+}
+
+void Simulator::create_random_vehs(int n)
+{
+}
+
 Road Road::gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width)
 {
     constexpr auto min_lane_width{2.0f};    // meter
@@ -434,6 +504,11 @@ Road Road::gen_straight(const Vector3& start_position, float length, int num_lan
     return road;
 }
 
+void ControllableVeh::act(float steer, float accel)
+{
+
+}
+
 int main()
 {
     auto sim{Simulator::instance()};
@@ -444,7 +519,11 @@ int main()
             2,
             3.7f));
 
+    int car_id{sim->create_ctrl_veh()};
+    sim->create_random_vehs(3);
+
     while (sim->is_running()) {
+        sim->get_ctrl_veh(car_id).act(0.0f, 0.2f);
         sim->step(0.1f);
         sim->render();
     }
