@@ -154,6 +154,7 @@ class Viz
     {
         Mesh mesh;
         Model model;
+        Vector3 model_center;
     }; // struct DrawablePointcloudModel
 
     struct DrawableTrj2d
@@ -214,7 +215,6 @@ private:
     Drawable* get_drawable(const std::string& topic);
 
     Camera camera_;
-    Vector3 model_center_;
     std::unordered_map<std::string, Drawable*> drawables_;
 }; // struct Viz
 
@@ -313,10 +313,6 @@ Viz::Viz()
     camera_.up         = {0.0f, 1.0f, 0.0f};
     camera_.fovy       = 45.0f;
     camera_.projection = CAMERA_PERSPECTIVE;
-
-    model_center_.x = 0.0f;
-    model_center_.y = 0.0f;
-    model_center_.z = 0.0f;
 }
 
 Viz::~Viz()
@@ -432,7 +428,9 @@ void Viz::render()
                 switch (it.second->type) {
                 case DT_MESH_MODEL:
                     {
-                        DrawModelPoints(it.second->pointcloud_model->model, model_center_, 1.0f, WHITE);
+                        auto pointcloud_model{it.second->pointcloud_model};
+                        DrawModelPoints(pointcloud_model->model, pointcloud_model->model_center,
+                            1.0f, WHITE);
                     } break;
                 case DT_POSE:
                     {
@@ -506,7 +504,12 @@ void Viz::render()
 bool Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
 {
     auto drawable{get_drawable(topic)};
-    if (!drawable->pointcloud_model) drawable->pointcloud_model = new DrawablePointcloudModel;
+    if (!drawable->pointcloud_model) {
+        drawable->pointcloud_model = new DrawablePointcloudModel;
+        drawable->pointcloud_model->model_center.x = 0.0f;
+        drawable->pointcloud_model->model_center.y = 0.0f;
+        drawable->pointcloud_model->model_center.z = 0.0f;
+    }
     set_pointcloud_mesh_buffer(pc.size(), drawable->pointcloud_model->mesh);
     for (size_t i = 0; i < pc.size(); ++i) {
         const auto& point{pc.at(i)};
@@ -528,7 +531,13 @@ bool Viz::draw_pointcloud(const std::string& topic, const PointRGBCloud& pc)
 bool Viz::draw_pointcloud(const std::string& topic, const PointICloud& pc)
 {
     auto drawable{get_drawable(topic)};
-    if (!drawable->pointcloud_model) drawable->pointcloud_model = new DrawablePointcloudModel;
+    if (!drawable->pointcloud_model) {
+        drawable->pointcloud_model = new DrawablePointcloudModel;
+        drawable->pointcloud_model->model_center.x = 0.0f;
+        drawable->pointcloud_model->model_center.y = 0.0f;
+        drawable->pointcloud_model->model_center.z = 0.0f;
+    }
+
     set_pointcloud_mesh_buffer(pc.size(), drawable->pointcloud_model->mesh);
     Color color;
     for (size_t i = 0; i < pc.size(); ++i) {
