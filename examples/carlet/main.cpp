@@ -1,11 +1,18 @@
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <iostream>
 #include <mutex>
 #include <cassert>
 #include <ostream>
 #include <raylib.h>
 #include <rlgl.h>
+#include <raymath.h>
 #include <vector>
 
+#ifndef CARLET_TARGET_FPS
+#   define CARLET_TARGET_FPS         60
+#endif // CARLET_TARGET_FPS
 
 #ifndef CARLET_WIN_WIDTH
 #   define CARLET_WIN_WIDTH         800
@@ -75,22 +82,27 @@ struct Object
 {
     Model model;
     Color color;
+    Matrix transform;
+    virtual bool step(float dt) { return true; }
 }; // struct Object
 
 struct Veh: public Object
 {
     float spd;
     float accel;
+    float jerk;
+    float yaw_rate;
 }; // struct Veh
 
 struct ControllableVeh : public Veh
 {
     void act(float steer, float accel);
+    virtual bool step(float dt) override;
 }; // struct ControllableVehicle
 
 struct SelfDrivingVeh : public Veh
 {
-
+    virtual bool step(float dt) override { return true; }
 }; // struct ControllableVehicle
 
 #define CARLET_DEF_SINGLETON(classname)                           \
@@ -144,6 +156,12 @@ inline T max(T a, T b) { return a > b ? a : b; }
 template<typename T>
 inline T clamp(T v, T low, T high) { return v > high ? high : v < low ? low : v; }
 
+template<typename T>
+inline T mps_to_kmph(T mps) { return mps * static_cast<T>(3.6); }
+
+template<typename T>
+inline T kmph_to_mps(T kmph) { return kmph / static_cast<T>(3.6); }
+
 static const Color VEH_COLORS[]{
     YELLOW, GOLD, ORANGE, PINK, RED, MAROON,
     GREEN, LIME, DARKGREEN, SKYBLUE, BLUE, DARKBLUE, PURPLE,
@@ -184,43 +202,69 @@ std::ostream& operator<<(std::ostream& os, const Vector3& vec)
     return os;
 }
 
+Road Road::gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width)
+{
+    constexpr auto min_lane_width{2.0f};    // meter
+    constexpr auto sample_length{1.0f};     // meter
+
+    assert(length > 0.0f && "Bad road length");
+    assert(num_lane > 0 && "Bad number of lane");
+    assert(lane_width > min_lane_width && "Bad lane width");
+
+    const auto num_samples{max(static_cast<int>(length / sample_length), 1)};
+    const auto road_width{num_lane * lane_width};
+
+    Road road;
+    road.left_edge.resize(num_samples);
+    road.right_edge.resize(num_samples);
+    if (num_lane >= 2) {
+        road.lanelets.resize(num_lane - 1);
+        for (auto& lanelet : road.lanelets) {
+            lanelet.resize(num_samples);
+        }
+    }
+
+    constexpr auto half_road_edge_width{CARLET_ROAD_EDGE_WIDTH / 2.0f};
+    const auto road_left_edge_y_e{start_position.y + road_width / 2.0f - half_road_edge_width};
+    const auto road_left_edge_y_s{start_position.y + road_width / 2.0f + half_road_edge_width};
+    const auto road_right_edge_y_e{start_position.y - road_width / 2.0f - half_road_edge_width};
+    const auto road_right_edge_y_s{start_position.y - road_width / 2.0f + half_road_edge_width};
+    for (int i = 0; i < num_samples; ++i) {
+        const auto sample_x{sample_length * i};
+        road.left_edge.at(i).l.x = sample_x;
+        road.left_edge.at(i).l.y = road_left_edge_y_s;
+        road.left_edge.at(i).l.z = 0;
+        road.left_edge.at(i).r.x = sample_x;
+        road.left_edge.at(i).r.y = road_left_edge_y_e;
+        road.left_edge.at(i).r.z = 0;
+
+        road.right_edge.at(i).l.x = sample_x;
+        road.right_edge.at(i).l.y = road_right_edge_y_s;
+        road.right_edge.at(i).l.z = 0;
+        road.right_edge.at(i).r.x = sample_x;
+        road.right_edge.at(i).r.y = road_right_edge_y_e;
+        road.right_edge.at(i).r.z = 0;
+
+        if (!road.lanelets.empty()) {
+            for (size_t j = 0; j < road.lanelets.size(); ++j) {
+                auto& lanelet{road.lanelets.at(j)};
+                const auto lane_offset{(j + 1) * lane_width};
+                lanelet.at(i).l.x = sample_x;
+                lanelet.at(i).l.y = road_left_edge_y_e - lane_offset;
+                lanelet.at(i).l.z = 0;
+                lanelet.at(i).r.x = sample_x;
+                lanelet.at(i).r.y = road_left_edge_y_e - lane_offset - CARLET_LANELET_WIDTH;
+                lanelet.at(i).r.z = 0;
+            }
+        }
+    }
+
+    return road;
+}
+
 bool Simulator::is_running()
 {
     return !WindowShouldClose();
-}
-
-bool Simulator::step(float dt)
-{
-    return true;
-}
-
-void Simulator::render()
-{
-    camera_.fovy += GetMouseWheelMove() * -5;
-    camera_.fovy = clamp(camera_.fovy, 0.0f, 170.0f);
-
-    const Vector3 zero_vec{0};
-    UpdateCamera(&camera_, CAMERA_PERSPECTIVE);
-    BeginDrawing();
-        ClearBackground(GRAY);
-        BeginMode3D(camera_);
-            {
-                // draw map
-                map_to_mesh_model();
-                DrawModel(map_.road_model, zero_vec, 1.0f, DARKGRAY);
-                DrawModel(map_.edge_model, zero_vec, 1.0f, BLACK);
-                DrawModel(map_.lanelet_model, zero_vec, 1.0f, YELLOW);
-            }
-            {
-                // draw vehicle
-                for (const auto& veh: ctrl_vehs_) {
-                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
-                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
-                }
-            }
-            DrawGrid(10, 1.0f);
-        EndMode3D();
-    EndDrawing();
 }
 
 void Simulator::map_to_mesh_model()
@@ -410,25 +454,127 @@ void Simulator::map_to_mesh_model()
 Simulator::Simulator()
 {
     InitWindow(CARLET_WIN_WIDTH, CARLET_WIN_HEIGHT, CARLET_WIN_TITLE);
-    SetTargetFPS(20);
+    SetTargetFPS(CARLET_TARGET_FPS);
 
-    camera_.position = (Vector3){ 0.0f, 10.0f, 10.0f };    // Camera position
-    camera_.target = (Vector3){ 0.0f, 0.0f, 0.0f };        // Camera looking at point
-    camera_.up = (Vector3){ 0.0f, 1.0f, 0.0f };            // Camera up vector (rotation towards target)
-    camera_.fovy = 45.0f;                                           // Camera field-of-view Y
-    camera_.projection = CAMERA_PERSPECTIVE;                        // Camera mode type
+    camera_.position    = {0.0f, 5.0f, 0.0f};
+    camera_.target      = {0.0f, 0.0f, 0.0f};
+    camera_.up          = {0.0f, 1.0f, 0.0f};
+    camera_.fovy        = 45.0f;
+    camera_.projection  = CAMERA_PERSPECTIVE;
+}
+
+void Simulator::render()
+{
+    camera_.fovy += GetMouseWheelMove() * -5;
+    camera_.fovy = clamp(camera_.fovy, 0.0f, 170.0f);
+
+    static int last_left_down_x{-1};
+    static int last_left_down_y{-1};
+    static int last_right_down_x{-1};
+    static int last_right_down_y{-1};
+
+    static Vector3 camera_pos_offset{camera_.position};
+    static Vector3 camera_target_offset{camera_.target};
+
+    if (!ctrl_vehs_.empty()) {
+        // camera follow this first controllable car    
+        const auto veh{ctrl_vehs_.at(0)};
+        camera_.target.z = camera_target_offset.z + -veh.transform.m12 - 80;
+        camera_.target.x = camera_target_offset.x;
+        camera_.target.y = camera_target_offset.y;
+        camera_.position.z = camera_pos_offset.z - veh.transform.m12 + 20;
+        camera_.position.x = camera_pos_offset.x;
+        camera_.position.y = camera_pos_offset.y;
+    } else {
+        camera_.target.z = camera_target_offset.z;
+        camera_.target.x = camera_target_offset.x;
+        camera_.target.y = camera_target_offset.y;
+        camera_.position.z = camera_pos_offset.z;
+        camera_.position.x = camera_pos_offset.x;
+        camera_.position.y = camera_pos_offset.y;
+    }
+
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        last_left_down_x = -1;
+        last_left_down_y = -1;
+    } else if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        int this_left_down_x{GetMouseX()};
+        int this_left_down_y{GetMouseY()};
+        if (last_left_down_x > 0 || last_left_down_y > 0) {
+            const auto delta_x{this_left_down_x - last_left_down_x};
+            const auto delta_y{this_left_down_y - last_left_down_y};
+            camera_pos_offset.x -= delta_x * 0.03f;
+            camera_pos_offset.z -= delta_y * 0.03;
+            camera_target_offset.x -= delta_x * 0.03f;
+            camera_target_offset.z -= delta_y * 0.03;
+        }
+        last_left_down_x = this_left_down_x;
+        last_left_down_y = this_left_down_y;
+    } else if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+        last_right_down_x = -1;
+        last_right_down_y = -1;
+    } else if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        int this_right_down_x{GetMouseX()};
+        int this_right_down_y{GetMouseY()};
+        if (last_right_down_x > 0 || last_right_down_y > 0) {
+            const auto delta_x{this_right_down_x - last_right_down_x};
+            const auto delta_y{this_right_down_y - last_right_down_y};
+            camera_target_offset.y += delta_y * 0.5f;
+            camera_target_offset.x -= delta_x * 0.1f;
+        }
+        last_right_down_x = this_right_down_x;
+        last_right_down_y = this_right_down_y;
+    }
+    UpdateCamera(&camera_, CAMERA_CUSTOM);
+
+    static const Vector3 zero_vec{};
+    BeginDrawing();
+        ClearBackground(GRAY);
+        BeginMode3D(camera_);
+            {
+                // draw map
+                map_to_mesh_model();
+                DrawModel(map_.road_model, zero_vec, 1.0f, DARKGRAY);
+                DrawModel(map_.edge_model, zero_vec, 1.0f, BLACK);
+                DrawModel(map_.lanelet_model, zero_vec, 1.0f, YELLOW);
+            }
+            {
+                // draw vehicle
+                for (const auto& veh: ctrl_vehs_) {
+                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
+                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
+                }
+            }
+            // DrawGrid(10, 1.0f);
+        EndMode3D();
+
+        // Draw in 2d space
+        {
+            // Show veh speed
+            if (!ctrl_vehs_.empty()) {
+                const auto& veh{ctrl_vehs_.at(0)};
+                constexpr auto font_size{40};
+                constexpr auto buf_size{32};
+                constexpr auto str_len{8};   // I guess
+                constexpr auto str_position_x{CARLET_WIN_WIDTH / 2 - (str_len / 2) * font_size / 2};
+                char buf[buf_size];
+                snprintf(buf, buf_size, "%.1f KM/H", mps_to_kmph(veh.spd));
+                DrawText(buf, str_position_x, 10, font_size, RED);
+            }
+        }
+    EndDrawing();
 }
 
 int Simulator::create_ctrl_veh()
 {
-    ControllableVeh veh{0};
+    ControllableVeh veh{};
     veh.color = random_color();
     auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
     UploadMesh(&mesh, true);
     veh.model = LoadModelFromMesh(mesh);
-    veh.model.transform.m12 = 0.0f;
-    veh.model.transform.m13 = 0.0f;
-    veh.model.transform.m14 = 0.0f;
+    veh.transform.m12 = 0.0f;
+    veh.transform.m13 = 0.0f;
+    veh.transform.m14 = CARLET_DEF_VEH_HEIGHT / 2.0f;
 
     ctrl_vehs_.push_back(veh);
     return ctrl_vehs_.size() - 1;
@@ -444,69 +590,29 @@ void Simulator::create_random_vehs(int n)
 {
 }
 
-Road Road::gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width)
+bool Simulator::step(float dt)
 {
-    constexpr auto min_lane_width{2.0f};    // meter
-    constexpr auto sample_length{1.0f};     // meter
-
-    assert(length > 0.0f && "Bad road length");
-    assert(num_lane > 0 && "Bad number of lane");
-    assert(lane_width > min_lane_width && "Bad lane width");
-
-    const auto num_samples{max(static_cast<int>(length / sample_length), 1)};
-    const auto road_width{num_lane * lane_width};
-
-    Road road;
-    road.left_edge.resize(num_samples);
-    road.right_edge.resize(num_samples);
-    if (num_lane >= 2) {
-        road.lanelets.resize(num_lane - 1);
-        for (auto& lanelet : road.lanelets) {
-            lanelet.resize(num_samples);
-        }
+    for (auto& veh: ctrl_vehs_) {
+        veh.step(dt);
     }
-
-    constexpr auto half_road_edge_width{CARLET_ROAD_EDGE_WIDTH / 2.0f};
-    const auto road_left_edge_y_e{start_position.y + road_width / 2.0f - half_road_edge_width};
-    const auto road_left_edge_y_s{start_position.y + road_width / 2.0f + half_road_edge_width};
-    const auto road_right_edge_y_e{start_position.y - road_width / 2.0f - half_road_edge_width};
-    const auto road_right_edge_y_s{start_position.y - road_width / 2.0f + half_road_edge_width};
-    for (int i = 0; i < num_samples; ++i) {
-        const auto sample_x{sample_length * i};
-        road.left_edge.at(i).l.x = sample_x;
-        road.left_edge.at(i).l.y = road_left_edge_y_s;
-        road.left_edge.at(i).l.z = 0;
-        road.left_edge.at(i).r.x = sample_x;
-        road.left_edge.at(i).r.y = road_left_edge_y_e;
-        road.left_edge.at(i).r.z = 0;
-
-        road.right_edge.at(i).l.x = sample_x;
-        road.right_edge.at(i).l.y = road_right_edge_y_s;
-        road.right_edge.at(i).l.z = 0;
-        road.right_edge.at(i).r.x = sample_x;
-        road.right_edge.at(i).r.y = road_right_edge_y_e;
-        road.right_edge.at(i).r.z = 0;
-
-        if (!road.lanelets.empty()) {
-            for (size_t j = 0; j < road.lanelets.size(); ++j) {
-                auto& lanelet{road.lanelets.at(j)};
-                const auto lane_offset{(j + 1) * lane_width};
-                lanelet.at(i).l.x = sample_x;
-                lanelet.at(i).l.y = road_left_edge_y_e - lane_offset;
-                lanelet.at(i).l.z = 0;
-                lanelet.at(i).r.x = sample_x;
-                lanelet.at(i).r.y = road_left_edge_y_e - lane_offset - CARLET_LANELET_WIDTH;
-                lanelet.at(i).r.z = 0;
-            }
-        }
-    }
-
-    return road;
+    return true;
 }
 
 void ControllableVeh::act(float steer, float accel)
 {
+    this->accel = accel;
+}
 
+bool ControllableVeh::step(float dt)
+{
+    spd += accel * dt;
+    transform.m12 += spd * dt;
+
+    // setup model
+    model.transform.m12 = -transform.m13;
+    model.transform.m13 = transform.m14;
+    model.transform.m14 = -transform.m12;
+    return true;
 }
 
 int main()
@@ -524,7 +630,7 @@ int main()
 
     while (sim->is_running()) {
         sim->get_ctrl_veh(car_id).act(0.0f, 0.2f);
-        sim->step(0.1f);
+        sim->step(0.02f);
         sim->render();
     }
     return 0;
