@@ -1,8 +1,6 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <cmath>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <vector>
@@ -110,6 +108,7 @@ private:
 
 struct Object
 {
+    Vector3 shape;
     Model model;
     Color color;
 private:
@@ -142,10 +141,11 @@ struct ControllableVeh : public Veh
     void act(float steer, float accel);
 }; // struct ControllableVehicle
 
-struct SelfDrivingVeh : public Veh
+struct IDMVeh : public Veh
 {
-    virtual bool step(float dt) override { return true; }
-}; // struct ControllableVehicle
+    IDMVeh(float init_x, float init_y, float init_vel, const VehModel& model)
+        : Veh(init_x, init_y, init_vel, model) {}
+}; // struct IDMVeh
 
 class Simulator
 {
@@ -164,9 +164,10 @@ private:
     Simulator();
     void map_to_mesh_model();
     void update_camera();
+    bool collision_with_any_veh(const Veh& veh);
 
     Map map_;
-    // std::vector<SelfDrivingVeh> sd_vehs_;
+    std::vector<IDMVeh> idm_vehs_;
     std::vector<ControllableVeh> ctrl_vehs_;
     Camera3D camera_;
 }; // class Simulator
@@ -192,6 +193,10 @@ extern const VehModel tesla;
 #include <cassert>
 #include <rlgl.h>
 #include <raymath.h>
+
+#ifdef _GLIBCXX_OSTREAM
+#   include <iomanip>
+#endif // _GLIBCXX_OSTREAM
 
 
 #ifndef CARLET_EPSf
@@ -258,6 +263,16 @@ inline constexpr T rad_to_deg(T rad) { return rad / M_PI * 180.0; }
 template<typename T>
 inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * M_PI; }
 
+bool check_veh_collision(const Veh& a, const Veh& b);
+
+template<typename T>
+inline T rand_ab(T a, T b)
+{
+    assert(b > a);
+    const auto rv01{static_cast<float>(rand()) / static_cast<float>(RAND_MAX)};
+    return rv01 * (b - a) + a;
+}
+
 namespace veh_model {
 
 const VehModel tesla {
@@ -266,6 +281,15 @@ const VehModel tesla {
     .max_steer = deg_to_rad(25.0f),
     .min_steer = deg_to_rad(-25.0f),
 }; // tesla
+
+static const VehModel all_veh_models[] {
+    tesla
+};
+
+const VehModel& random() {
+    constexpr auto num_models{sizeof(all_veh_models) / sizeof(all_veh_models[0])};
+    return all_veh_models[rand() % num_models];
+}
 
 }; // namespace veh_model
 
@@ -718,6 +742,11 @@ void Simulator::render()
                     DrawModel(veh.model, zero_vec, 1.0f, veh.color);
                     DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
                 }
+
+                for (const auto& veh: idm_vehs_) {
+                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
+                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
+                }
             }
             // DrawGrid(10, 1.0f);
         EndMode3D();
@@ -742,10 +771,13 @@ void Simulator::render()
 int Simulator::create_ctrl_veh(const VehModel& model)
 {
     ControllableVeh veh{0.0f, 0.0f, 0.0f, model};
-    veh.color = random_color();
+    veh.shape.x = CARLET_DEF_VEH_LEN;
+    veh.shape.y = CARLET_DEF_VEH_WIDTH;
+    veh.shape.z = CARLET_DEF_VEH_HEIGHT;
     auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
     UploadMesh(&mesh, true);
     veh.model = LoadModelFromMesh(mesh);
+    veh.color = random_color();
 
     ctrl_vehs_.push_back(veh);
     return ctrl_vehs_.size() - 1;
@@ -757,13 +789,64 @@ ControllableVeh& Simulator::get_ctrl_veh(int id)
     return ctrl_vehs_.at(id);
 }
 
+bool Simulator::collision_with_any_veh(const Veh& veh)
+{
+    for (const auto& other_veh: idm_vehs_) {
+        if (check_veh_collision(veh, other_veh)) {
+            return true;
+        }
+    }
+    for (const auto& other_veh: ctrl_vehs_) {
+        if (check_veh_collision(veh, other_veh)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Simulator::gen_random_vehs(int n)
 {
+    constexpr auto min_spd{kmph_to_mps(20.0f /* kmph */)};
+    constexpr auto max_spd{kmph_to_mps(80.0f /* kmph */)};
+
+    const auto& roads{map_.road_net.roads};
+    const auto num_roads{roads.size()};
+    const auto num_veh_each_road{n / num_roads};
+
+    for (const auto& road: roads) {
+        const auto num_lane{road.lanes.size()};
+        for (int i = 0; i < num_veh_each_road;) {
+            const auto lane_idx{rand_ab(0ul, num_lane)};
+            const auto& target_lane{road.lanes.at(lane_idx)};
+            const auto sample_idx{rand_ab(0ul, target_lane.size())};
+            const auto& waypoing{target_lane.at(sample_idx)};
+            const auto veh_vel{rand_ab(min_spd, max_spd)};
+
+            IDMVeh veh{waypoing.c.x, waypoing.c.y, veh_vel, veh_model::random()};
+            veh.shape.x = CARLET_DEF_VEH_LEN;
+            veh.shape.y = CARLET_DEF_VEH_WIDTH;
+            veh.shape.z = CARLET_DEF_VEH_HEIGHT;
+
+            // collision check
+            if (collision_with_any_veh(veh)) continue;
+
+            // properties for rendering
+            auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
+            UploadMesh(&mesh, true);
+            veh.color = random_color();
+            veh.model = LoadModelFromMesh(mesh);
+            idm_vehs_.push_back(veh);
+            ++i;
+        }
+    }
 }
 
 bool Simulator::step(float dt)
 {
     for (auto& veh: ctrl_vehs_) {
+        veh.step(dt);
+    }
+    for (auto& veh: idm_vehs_) {
         veh.step(dt);
     }
     return true;
@@ -800,6 +883,70 @@ void BicycleModel::act(float steer, float accel, float dt)
     state_.y += dy * dt;
     state_.yaw_rate = state_.vel / r;
     state_.yaw += state_.yaw_rate * dt;
+}
+
+bool check_veh_collision(const Veh& a, const Veh& b)
+{
+    constexpr float min_veh_space{0.5f}; // meter
+
+    const auto a_yaw{a.state().yaw};
+    const auto a_hw{a.shape.y / 2.0f}; // half width
+    const auto a_hl{a.shape.x / 2.0f}; // half length
+    const Vector2 a_center{a.state().x, a.state().y};
+
+    const auto b_yaw{b.state().yaw};
+    const auto b_hw{b.shape.y / 2.0f}; // half width
+    const auto b_hl{b.shape.x / 2.0f}; // half length
+    const Vector2 b_center{b.state().x, b.state().y};
+
+    // quick collision check (naive solution)
+    const auto ab_dist{Vector2Distance(a_center, b_center)};
+    if (ab_dist > a_hl + b_hl + min_veh_space) {
+        return false;
+    }
+    if (ab_dist < a_hw + b_hw + min_veh_space) {
+        return true;
+    }
+
+    // 2d AABB check
+    const auto a_sin_yaw{std::sin(a_yaw)};
+    const auto a_cos_yaw{std::cos(a_yaw)};
+    const auto a_aabb_tl_x{a_hl * a_cos_yaw + a_hw * a_sin_yaw + a_center.x};
+    const auto a_aabb_tl_y{a_hw * a_cos_yaw + a_hl * a_sin_yaw + a_center.y};
+    const auto a_aabb_tr_x{a_hl * a_cos_yaw - a_hw * a_sin_yaw + a_center.x};
+    const auto a_aabb_tr_y{-a_hw * a_cos_yaw + a_hl * a_sin_yaw + a_center.y};
+    const auto a_aabb_bl_x{-a_hl * a_cos_yaw + a_hw * a_sin_yaw + a_center.x};
+    const auto a_aabb_bl_y{a_hw * a_cos_yaw - a_hl * a_sin_yaw + a_center.y};
+    const auto a_aabb_br_x{-a_hl * a_cos_yaw - a_hw * a_sin_yaw + a_center.x};
+    const auto a_aabb_br_y{-a_hw * a_cos_yaw - a_hl * a_sin_yaw + a_center.y};
+
+    const auto b_sin_yaw{std::sin(b_yaw)};
+    const auto b_cos_yaw{std::cos(b_yaw)};
+    const auto b_aabb_tl_x{b_hl * b_cos_yaw + b_hw * b_sin_yaw + b_center.x};
+    const auto b_aabb_tl_y{b_hw * b_cos_yaw + b_hl * b_sin_yaw + b_center.y};
+    const auto b_aabb_tr_x{b_hl * b_cos_yaw - b_hw * b_sin_yaw + b_center.x};
+    const auto b_aabb_tr_y{-b_hw * b_cos_yaw + b_hl * b_sin_yaw + b_center.y};
+    const auto b_aabb_bl_x{-b_hl * b_cos_yaw + b_hw * b_sin_yaw + b_center.x};
+    const auto b_aabb_bl_y{b_hw * b_cos_yaw - b_hl * b_sin_yaw + b_center.y};
+    const auto b_aabb_br_x{-b_hl * b_cos_yaw - b_hw * b_sin_yaw + b_center.x};
+    const auto b_aabb_br_y{-b_hw * b_cos_yaw - b_hl * b_sin_yaw + b_center.y};
+
+    const auto a_max_x{max(max(a_aabb_tl_x, a_aabb_tr_x), max(a_aabb_bl_x, a_aabb_br_x))};
+    const auto b_max_x{max(max(b_aabb_tl_x, b_aabb_tr_x), max(b_aabb_bl_x, b_aabb_br_x))};
+    const auto a_min_x{min(min(a_aabb_tl_x, a_aabb_tr_x), min(a_aabb_bl_x, a_aabb_br_x))};
+    const auto b_min_x{min(min(b_aabb_tl_x, b_aabb_tr_x), min(b_aabb_bl_x, b_aabb_br_x))};
+
+    const auto a_max_y{max(max(a_aabb_tl_y, a_aabb_tr_y), max(a_aabb_bl_y, a_aabb_br_y))};
+    const auto b_max_y{max(max(b_aabb_tl_y, b_aabb_tr_y), max(b_aabb_bl_y, b_aabb_br_y))};
+    const auto a_min_y{min(min(a_aabb_tl_y, a_aabb_tr_y), min(a_aabb_bl_y, a_aabb_br_y))};
+    const auto b_min_y{min(min(b_aabb_tl_y, b_aabb_tr_y), min(b_aabb_bl_y, b_aabb_br_y))};
+
+    if (min(a_max_x, a_max_x) > max(a_min_x, a_min_x) &&
+        min(a_max_y, a_max_y) > max(a_min_y, a_min_y)) {
+        return true;
+    }
+
+    return false;
 }
 
 } // namespace carlet
