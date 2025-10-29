@@ -10,11 +10,11 @@ int main()
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.roads.push_back(straight_road);
-    const int car_id{sim->create_ctrl_veh()};
+    const int car_id{sim->create_ctrl_veh(carlet::veh_model::tesla)};
     sim->gen_random_vehs(3);
 
     while (sim->is_running()) {
-        sim->get_ctrl_veh(car_id).act(0.0f, 0.2f);
+        sim->get_ctrl_veh(car_id).act(0.0f, 0.5f);
         sim->step(0.02f);
         sim->render();
     }

@@ -1,46 +1,12 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
+#include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <mutex>
 #include <vector>
 #include <raylib.h>
-
-
-#ifndef CARLET_TARGET_FPS
-#   define CARLET_TARGET_FPS        60
-#endif // CARLET_TARGET_FPS
-
-#ifndef CARLET_WIN_WIDTH
-#   define CARLET_WIN_WIDTH         800
-#endif // CARLET_WIN_WIDTH
-
-#ifndef CARLET_WIN_HEIGHT
-#   define CARLET_WIN_HEIGHT        600
-#endif // CARLET_WIN_HEIGHT
-
-#ifndef CARLET_WIN_TITLE
-#   define CARLET_WIN_TITLE         "Carlet Simulator"
-#endif // CARLET_WIN_TITLE
-
-#ifndef CARLET_ROAD_EDGE_WIDTH
-#   define CARLET_ROAD_EDGE_WIDTH   0.1f   // meter, which is 1cm
-#endif // CARLET_ROAD_EDGE_WIDTH
-
-#ifndef CARLET_LANELET_WIDTH
-#   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 1cm
-#endif // CARLET_LANELET_WIDTH
-
-#ifndef CARLET_DEF_VEH_LEN
-#   define CARLET_DEF_VEH_LEN       4.2f
-#endif // CARLET_DEF_VEH_LEN
-
-#ifndef CARLET_DEF_VEH_WIDTH
-#   define CARLET_DEF_VEH_WIDTH     1.98f
-#endif // CARLET_DEF_VEH_WIDTH
-
-#ifndef CARLET_DEF_VEH_HEIGHT
-#   define CARLET_DEF_VEH_HEIGHT     1.6f
-#endif // CARLET_DEF_VEH_HEIGHT
 
 #define CARLET_DEF_SINGLETON(classname)                           \
     public:                                                       \
@@ -104,24 +70,67 @@ struct Map
     Model lanelet_model;
 }; // struct Map
 
+struct VehModel
+{
+    float wheel_base;
+    float gc_to_back_axle;  // gc: gravity center
+    float max_steer;
+    float min_steer;
+}; // struct VehModel
+
+class BicycleModel
+{
+public:
+    struct State
+    {
+        float x;
+        float y;
+        float z;
+        float vel;
+        float accel;
+        float jerk;
+        float yaw;
+        float yaw_rate;
+        float steer_angle;
+
+        static State init_with(float init_x, float init_y, float init_vel);
+    }; // struct State
+
+    BicycleModel(const State& state, const VehModel& vm)
+        : state_(state)
+        , vm_(vm) {}
+    void act(float steer, float accel, float dt);
+    inline const State& state() const { return state_; }
+private:
+    State state_;
+    const VehModel vm_;
+}; // class BicycleModel
+
 struct Object
 {
     Model model;
     Color color;
-    Matrix transform;
     virtual bool step(float dt) { return true; }
 }; // struct Object
 
 struct Veh: public Object
 {
-    float spd;
+    Veh(float init_x, float init_y, float init_vel, const VehModel& model)
+        : steer(0.0f)
+        , accel(0.0f)
+        , dynamic(BicycleModel::State::init_with(init_x, init_y, init_vel), model)
+        {}
+
+    inline const BicycleModel::State& state() const { return dynamic.state(); }
+    float steer;
     float accel;
-    float jerk;
-    float yaw_rate;
+    BicycleModel dynamic;
 }; // struct Veh
 
 struct ControllableVeh : public Veh
 {
+    ControllableVeh(float init_x, float init_y, float init_vel, const VehModel& model)
+        : Veh(init_x, init_y, init_vel, model) {}
     void act(float steer, float accel);
     virtual bool step(float dt) override;
 }; // struct ControllableVehicle
@@ -140,7 +149,7 @@ public:
     bool step(float dt);
     void render();
 
-    int create_ctrl_veh();
+    int create_ctrl_veh(const VehModel& model);
     ControllableVeh& get_ctrl_veh(int id);
     void gen_random_vehs(int n);
     inline Map& map() { return map_; }
@@ -153,6 +162,12 @@ private:
     std::vector<ControllableVeh> ctrl_vehs_;
     Camera3D camera_;
 }; // class Simulator
+
+namespace veh_model {
+
+extern const VehModel tesla;
+
+}; // namespace veh_model
 
 } // namespace carlet
 
@@ -170,7 +185,81 @@ private:
 #include <rlgl.h>
 #include <raymath.h>
 
+
+#ifndef CARLET_EPSf
+#   define CARLET_EPSf 1.0e-6f
+#endif // CARLET_EPSf
+
+#ifndef CARLET_TARGET_FPS
+#   define CARLET_TARGET_FPS        60
+#endif // CARLET_TARGET_FPS
+
+#ifndef CARLET_WIN_WIDTH
+#   define CARLET_WIN_WIDTH         800
+#endif // CARLET_WIN_WIDTH
+
+#ifndef CARLET_WIN_HEIGHT
+#   define CARLET_WIN_HEIGHT        600
+#endif // CARLET_WIN_HEIGHT
+
+#ifndef CARLET_WIN_TITLE
+#   define CARLET_WIN_TITLE         "Carlet Simulator"
+#endif // CARLET_WIN_TITLE
+
+#ifndef CARLET_ROAD_EDGE_WIDTH
+#   define CARLET_ROAD_EDGE_WIDTH   0.1f   // meter, which is 1cm
+#endif // CARLET_ROAD_EDGE_WIDTH
+
+#ifndef CARLET_LANELET_WIDTH
+#   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 1cm
+#endif // CARLET_LANELET_WIDTH
+
+#ifndef CARLET_DEF_VEH_LEN
+#   define CARLET_DEF_VEH_LEN       4.2f
+#endif // CARLET_DEF_VEH_LEN
+
+#ifndef CARLET_DEF_VEH_WIDTH
+#   define CARLET_DEF_VEH_WIDTH     1.98f
+#endif // CARLET_DEF_VEH_WIDTH
+
+#ifndef CARLET_DEF_VEH_HEIGHT
+#   define CARLET_DEF_VEH_HEIGHT     1.6f
+#endif // CARLET_DEF_VEH_HEIGHT
+
+
 namespace carlet {
+
+template<typename T>
+inline constexpr T min(T a, T b) { return a > b ? b : a; }
+
+template<typename T>
+inline constexpr T max(T a, T b) { return a > b ? a : b; }
+
+template<typename T>
+inline constexpr T clamp(T v, T low, T high) { return v > high ? high : v < low ? low : v; }
+
+template<typename T>
+inline constexpr T mps_to_kmph(T mps) { return mps * static_cast<T>(3.6); }
+
+template<typename T>
+inline constexpr T kmph_to_mps(T kmph) { return kmph / static_cast<T>(3.6); }
+
+template<typename T>
+inline constexpr T rad_to_deg(T rad) { return rad / M_PI * 180.0; }
+
+template<typename T>
+inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * M_PI; }
+
+namespace veh_model {
+
+const VehModel tesla {
+    .wheel_base = 2.8f,
+    .gc_to_back_axle = 1.5f,
+    .max_steer = deg_to_rad(25.0f),
+    .min_steer = deg_to_rad(-25.0f),
+}; // tesla
+
+}; // namespace veh_model
 
 static const Color veh_colors[] {
     YELLOW,  GOLD,    ORANGE,     PINK,    RED,   MAROON,
@@ -179,20 +268,35 @@ static const Color veh_colors[] {
     MAGENTA, RAYWHITE
 };
 
-template<typename T>
-inline T min(T a, T b) { return a > b ? b : a; }
+#ifdef _GLIBCXX_OSTREAM
+inline std::ostream& operator<<(std::ostream& os, const Vector2& vec)
+{
+    os << "(" << vec.x << ", " << vec.y << ")";
+    return os;
+}
 
-template<typename T>
-inline T max(T a, T b) { return a > b ? a : b; }
+inline std::ostream& operator<<(std::ostream& os, const Vector3& vec)
+{
+    os << "(" << vec.x << ", " << vec.y << ", " << vec.z << ")";
+    return os;
+}
 
-template<typename T>
-inline T clamp(T v, T low, T high) { return v > high ? high : v < low ? low : v; }
-
-template<typename T>
-inline T mps_to_kmph(T mps) { return mps * static_cast<T>(3.6); }
-
-template<typename T>
-inline T kmph_to_mps(T kmph) { return kmph / static_cast<T>(3.6); }
+inline std::ostream& operator<<(std::ostream& os, const BicycleModel::State& state)
+{
+    os << std::fixed << std::setprecision(2) << "State {"
+       << "x: " << state.x
+       << ", y: " << state.y
+       << ", z: " << state.z
+       << ", vel: " << state.vel
+       << ", accel: " << state.accel
+       << ", jerk: " << state.jerk
+       << ", yaw: " << state.yaw
+       << ", yaw_rate: " << state.yaw_rate
+       << ", steer_angle: " << state.steer_angle
+       << "}";
+    return os;
+}
+#endif // _GLIBCXX_OSTREAM
 
 inline const Color& random_color()
 {
@@ -213,6 +317,21 @@ inline void to_raylib_mesh3(float* vec)
 inline Vector3 to_raylib(const Vector3& vec)
 {
     return Vector3{.x = -vec.y, .y = vec.x, .z = vec.z};
+}
+
+BicycleModel::State BicycleModel::State::init_with(float init_x, float init_y, float init_vel)
+{
+    return State{
+        .x = init_x,
+        .y = init_y,
+        .z = CARLET_DEF_VEH_HEIGHT / 2.0f,
+        .vel = init_vel,
+        .accel = 0.0f,
+        .jerk = 0.0f,
+        .yaw = 0.0f,
+        .yaw_rate = 0.0f,
+        .steer_angle = 0.0f,
+    };
 }
 
 Road Road::gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width)
@@ -520,10 +639,11 @@ void Simulator::render()
     if (!ctrl_vehs_.empty()) {
         // camera follow this first controllable car    
         const auto veh{ctrl_vehs_.at(0)};
-        camera_.target.z = camera_target_offset.z + -veh.transform.m12 - 80;
+        const Vector3 veh_position{.x = veh.state().x, .y = veh.state().y, .z = veh.state().z};
+        camera_.target.z = camera_target_offset.z + -veh_position.x - 80;
         camera_.target.x = camera_target_offset.x;
         camera_.target.y = camera_target_offset.y;
-        camera_.position.z = camera_pos_offset.z - veh.transform.m12 + 20;
+        camera_.position.z = camera_pos_offset.z - veh_position.y + 20;
         camera_.position.x = camera_pos_offset.x;
         camera_.position.y = camera_pos_offset.y;
     } else {
@@ -599,23 +719,20 @@ void Simulator::render()
                 constexpr auto str_len{8};   // I guess
                 constexpr auto str_position_x{CARLET_WIN_WIDTH / 2 - (str_len / 2) * font_size / 2};
                 char buf[buf_size];
-                snprintf(buf, buf_size, "%.1f KM/H", mps_to_kmph(veh.spd));
+                snprintf(buf, buf_size, "%.1f KM/H", mps_to_kmph(veh.state().vel));
                 DrawText(buf, str_position_x, 10, font_size, RED);
             }
         }
     EndDrawing();
 }
 
-int Simulator::create_ctrl_veh()
+int Simulator::create_ctrl_veh(const VehModel& model)
 {
-    ControllableVeh veh{};
+    ControllableVeh veh{0.0f, 0.0f, 0.0f, model};
     veh.color = random_color();
     auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
     UploadMesh(&mesh, true);
     veh.model = LoadModelFromMesh(mesh);
-    veh.transform.m12 = 0.0f;
-    veh.transform.m13 = 0.0f;
-    veh.transform.m14 = CARLET_DEF_VEH_HEIGHT / 2.0f;
 
     ctrl_vehs_.push_back(veh);
     return ctrl_vehs_.size() - 1;
@@ -641,37 +758,38 @@ bool Simulator::step(float dt)
 
 void ControllableVeh::act(float steer, float accel)
 {
+    this->steer = steer;
     this->accel = accel;
 }
 
 bool ControllableVeh::step(float dt)
 {
-    spd += accel * dt;
-    transform.m12 += spd * dt;
-
-    // setup model
-    model.transform.m12 = -transform.m13;
-    model.transform.m13 = transform.m14;
-    model.transform.m14 = -transform.m12;
+    dynamic.act(steer, accel, dt);
+    // setup render model
+    model.transform = MatrixRotateY(state().yaw);
+    model.transform.m12 = -state().y;
+    model.transform.m13 = state().z;
+    model.transform.m14 = -state().x;
     return true;
 }
 
+void BicycleModel::act(float steer, float accel, float dt)
+{
+    state_.steer_angle = max(min(steer, vm_.max_steer), vm_.min_steer);
+    state_.vel += accel * dt;
+
+    const auto slip_angle{std::atan2(vm_.gc_to_back_axle * std::tan(state_.steer_angle), vm_.wheel_base)};
+    const auto vel_angle{slip_angle + state_.yaw};
+    const auto dy{state_.vel * std::sin(vel_angle)};
+    const auto dx{state_.vel * std::cos(vel_angle)};
+    const auto r{vm_.wheel_base / (std::tan(state_.steer_angle) * std::cos(slip_angle) + CARLET_EPSf)};
+    state_.x += dx * dt;
+    state_.y += dy * dt;
+    state_.yaw_rate = state_.vel / r;
+    state_.yaw += state_.yaw_rate * dt;
+}
+
 } // namespace carlet
-
-
-#ifdef _GLIBCXX_OSTREAM
-std::ostream& operator<<(std::ostream& os, const Vector2& vec)
-{
-    os << "(" << vec.x << ", " << vec.y << ")";
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, const Vector3& vec)
-{
-    os << "(" << vec.x << ", " << vec.y << ", " << vec.z << ")";
-    return os;
-}
-#endif // _GLIBCXX_OSTREAM
 
 #endif // CARLET_CPP_
 #endif // CARLET_IMPLEMENTATION
