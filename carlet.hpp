@@ -156,6 +156,7 @@ public:
 private:
     Simulator();
     void map_to_mesh_model();
+    void update_camera();
 
     Map map_;
     // std::vector<SelfDrivingVeh> sd_vehs_;
@@ -623,7 +624,7 @@ Simulator::Simulator()
     camera_.projection  = CAMERA_PERSPECTIVE;
 }
 
-void Simulator::render()
+void Simulator::update_camera()
 {
     camera_.fovy += GetMouseWheelMove() * -5;
     camera_.fovy = clamp(camera_.fovy, 0.0f, 170.0f);
@@ -687,6 +688,11 @@ void Simulator::render()
         last_right_down_y = this_right_down_y;
     }
     UpdateCamera(&camera_, CAMERA_CUSTOM);
+}
+
+void Simulator::render()
+{
+    update_camera();
 
     static const Vector3 zero_vec{};
     BeginDrawing();
