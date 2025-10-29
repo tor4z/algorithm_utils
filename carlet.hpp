@@ -30,6 +30,8 @@
 
 namespace carlet {
 
+class Simulator;
+
 struct Road
 {
     struct Strip {
@@ -110,6 +112,8 @@ struct Object
 {
     Model model;
     Color color;
+private:
+    friend class Simulator;
     virtual bool step(float dt) { return true; }
 }; // struct Object
 
@@ -122,9 +126,13 @@ struct Veh: public Object
         {}
 
     inline const BicycleModel::State& state() const { return dynamic.state(); }
+
     float steer;
     float accel;
     BicycleModel dynamic;
+private:
+    friend class Simulator;
+    virtual bool step(float dt) override;
 }; // struct Veh
 
 struct ControllableVeh : public Veh
@@ -132,7 +140,6 @@ struct ControllableVeh : public Veh
     ControllableVeh(float init_x, float init_y, float init_vel, const VehModel& model)
         : Veh(init_x, init_y, init_vel, model) {}
     void act(float steer, float accel);
-    virtual bool step(float dt) override;
 }; // struct ControllableVehicle
 
 struct SelfDrivingVeh : public Veh
@@ -768,7 +775,7 @@ void ControllableVeh::act(float steer, float accel)
     this->accel = accel;
 }
 
-bool ControllableVeh::step(float dt)
+bool Veh::step(float dt)
 {
     dynamic.act(steer, accel, dt);
     // setup render model
