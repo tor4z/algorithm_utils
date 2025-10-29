@@ -67,12 +67,20 @@ namespace carlet {
 struct Road
 {
     struct Strip {
-        Vector3 l;
-        Vector3 r;
+        Vector3 l;  // left line edge
+        Vector3 r;  // right line edge
     }; // struct Strip
+
+    struct LaneSample {
+        Vector3 c;  // lane center sample point
+        float width;
+    }; // struct LaneSample
+
+    using Lane = std::vector<LaneSample>;
     using Lanelet = std::vector<Strip>;
     using RoadEdge = std::vector<Strip>;
 
+    std::vector<Lane> lanes;
     std::vector<Lanelet> lanelets;
     RoadEdge left_edge;
     RoadEdge right_edge;
@@ -134,7 +142,7 @@ public:
 
     int create_ctrl_veh();
     ControllableVeh& get_ctrl_veh(int id);
-    void create_random_vehs(int n);
+    void gen_random_vehs(int n);
     inline Map& map() { return map_; }
 private:
     Simulator();
@@ -151,7 +159,8 @@ private:
 #endif // CARLET_HPP_
 
 
-// #define CARLET_IMPLEMENTATION delete me
+#define CARLET_IMPLEMENTATION delete me
+
 
 #ifdef CARLET_IMPLEMENTATION
 #ifndef CARLET_CPP_
@@ -228,25 +237,31 @@ Road Road::gen_straight(const Vector3& start_position, float length, int num_lan
         }
     }
 
+    road.lanes.resize(road.lanelets.size() + 1);
+    for (auto& lane: road.lanes) {
+        lane.resize(num_samples);
+    }
+
     constexpr auto half_road_edge_width{CARLET_ROAD_EDGE_WIDTH / 2.0f};
-    const auto road_left_edge_y_e{start_position.y + road_width / 2.0f - half_road_edge_width};
-    const auto road_left_edge_y_s{start_position.y + road_width / 2.0f + half_road_edge_width};
-    const auto road_right_edge_y_e{start_position.y - road_width / 2.0f - half_road_edge_width};
-    const auto road_right_edge_y_s{start_position.y - road_width / 2.0f + half_road_edge_width};
+    const auto road_left_edge_y_r{start_position.y + road_width / 2.0f - half_road_edge_width};
+    const auto road_left_edge_y_l{start_position.y + road_width / 2.0f + half_road_edge_width};
+    const auto road_right_edge_y_r{start_position.y - road_width / 2.0f - half_road_edge_width};
+    const auto road_right_edge_y_l{start_position.y - road_width / 2.0f + half_road_edge_width};
+
     for (int i = 0; i < num_samples; ++i) {
         const auto sample_x{sample_length * i};
         road.left_edge.at(i).l.x = sample_x;
-        road.left_edge.at(i).l.y = road_left_edge_y_s;
+        road.left_edge.at(i).l.y = road_left_edge_y_l;
         road.left_edge.at(i).l.z = 0;
         road.left_edge.at(i).r.x = sample_x;
-        road.left_edge.at(i).r.y = road_left_edge_y_e;
+        road.left_edge.at(i).r.y = road_left_edge_y_r;
         road.left_edge.at(i).r.z = 0;
 
         road.right_edge.at(i).l.x = sample_x;
-        road.right_edge.at(i).l.y = road_right_edge_y_s;
+        road.right_edge.at(i).l.y = road_right_edge_y_l;
         road.right_edge.at(i).l.z = 0;
         road.right_edge.at(i).r.x = sample_x;
-        road.right_edge.at(i).r.y = road_right_edge_y_e;
+        road.right_edge.at(i).r.y = road_right_edge_y_r;
         road.right_edge.at(i).r.z = 0;
 
         if (!road.lanelets.empty()) {
@@ -254,12 +269,34 @@ Road Road::gen_straight(const Vector3& start_position, float length, int num_lan
                 auto& lanelet{road.lanelets.at(j)};
                 const auto lane_offset{(j + 1) * lane_width};
                 lanelet.at(i).l.x = sample_x;
-                lanelet.at(i).l.y = road_left_edge_y_e - lane_offset;
+                lanelet.at(i).l.y = road_left_edge_y_l - lane_offset;
                 lanelet.at(i).l.z = 0;
                 lanelet.at(i).r.x = sample_x;
-                lanelet.at(i).r.y = road_left_edge_y_e - lane_offset - CARLET_LANELET_WIDTH;
+                lanelet.at(i).r.y = lanelet.at(i).l.y - CARLET_LANELET_WIDTH;
                 lanelet.at(i).r.z = 0;
             }
+            for (int j = 0; j <= static_cast<int>(road.lanelets.size()); ++j) {
+                const auto left_lanelet_idx{j - 1};
+                const auto right_lanelet_idx{j};
+
+                const auto left_edge{left_lanelet_idx < 0
+                    ? road_left_edge_y_l
+                    : road.lanelets.at(left_lanelet_idx).at(i).l.y};
+                const auto right_edge{right_lanelet_idx == road.lanelets.size()
+                    ? road_right_edge_y_r
+                    : road.lanelets.at(right_lanelet_idx).at(i).r.y};
+
+                road.lanes.at(j).at(i).width = lane_width;
+                road.lanes.at(j).at(i).c.x = sample_x;
+                road.lanes.at(j).at(i).c.y = (left_edge + right_edge) / 2.0f;
+                road.lanes.at(j).at(i).c.z = 0;
+            }
+        } else {
+            // single lane road
+            road.lanes.at(0).at(i).width = lane_width;
+            road.lanes.at(0).at(i).c.x = sample_x;
+            road.lanes.at(0).at(i).c.y = (road_right_edge_y_l + road_left_edge_y_r) / 2.0f;
+            road.lanes.at(0).at(i).c.z = 0;
         }
     }
 
@@ -590,7 +627,7 @@ ControllableVeh& Simulator::get_ctrl_veh(int id)
     return ctrl_vehs_.at(id);
 }
 
-void Simulator::create_random_vehs(int n)
+void Simulator::gen_random_vehs(int n)
 {
 }
 
@@ -619,6 +656,9 @@ bool ControllableVeh::step(float dt)
     return true;
 }
 
+} // namespace carlet
+
+
 #ifdef _GLIBCXX_OSTREAM
 std::ostream& operator<<(std::ostream& os, const Vector2& vec)
 {
@@ -632,8 +672,6 @@ std::ostream& operator<<(std::ostream& os, const Vector3& vec)
     return os;
 }
 #endif // _GLIBCXX_OSTREAM
-
-} // namespace carlet
 
 #endif // CARLET_CPP_
 #endif // CARLET_IMPLEMENTATION
