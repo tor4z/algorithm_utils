@@ -2,15 +2,6 @@
 #include "carlet.hpp"
 #include <cstdlib>
 #include <ctime>
-#include <iostream>
-
-template<typename T>
-inline T rand_ab(T a, T b)
-{
-    assert(b > a);
-    const auto rv01{static_cast<float>(rand()) / static_cast<float>(RAND_MAX)};
-    return rv01 * (b - a) + a;
-}
 
 
 int main()
