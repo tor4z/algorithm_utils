@@ -50,7 +50,7 @@ struct Road
     RoadEdge left_edge;
     RoadEdge right_edge;
 
-    static Road gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width);
+    static Road gen_straight(const Vector3& start_position, const Vector3& end_position, int num_lane, float lane_width);
 }; // struct Road
 
 struct RoadNet
@@ -160,7 +160,7 @@ public:
     void render();
 
     int create_ctrl_veh(const VehModel& model);
-    ControllableVeh& get_ctrl_veh(int id);
+    ControllableVeh& get_ctrl_veh(int idx);
     void gen_random_vehs(int n);
     inline Map& map() { return map_; }
 private:
@@ -404,11 +404,13 @@ BicycleModel::State BicycleModel::State::init_with(float init_x, float init_y, f
     };
 }
 
-Road Road::gen_straight(const Vector3& start_position, float length, int num_lane, float lane_width)
+Road Road::gen_straight(const Vector3& start_position, const Vector3& end_position, int num_lane, float lane_width)
 {
     constexpr auto min_lane_width{2.0f};    // meter
     constexpr auto sample_length{1.0f};     // meter
+    constexpr auto half_road_edge_width{CARLET_ROAD_EDGE_WIDTH / 2.0f};
 
+    const auto length{Vector3Distance(start_position, end_position)};
     assert(length > 0.0f && "Bad road length");
     assert(num_lane > 0 && "Bad number of lane");
     assert(lane_width > min_lane_width && "Bad lane width");
@@ -431,61 +433,75 @@ Road Road::gen_straight(const Vector3& start_position, float length, int num_lan
         lane.resize(num_samples);
     }
 
-    constexpr auto half_road_edge_width{CARLET_ROAD_EDGE_WIDTH / 2.0f};
-    const auto road_left_edge_y_r{start_position.y + road_width / 2.0f - half_road_edge_width};
-    const auto road_left_edge_y_l{start_position.y + road_width / 2.0f + half_road_edge_width};
-    const auto road_right_edge_y_r{start_position.y - road_width / 2.0f - half_road_edge_width};
-    const auto road_right_edge_y_l{start_position.y - road_width / 2.0f + half_road_edge_width};
+    auto calc_center_line{[&start_position, &end_position, length] (float s, Vector3& center_point) -> void {
+        center_point.x = (end_position.x - start_position.x) * s / length + start_position.x;
+        center_point.y = (end_position.y - start_position.y) * s / length + start_position.y;
+        center_point.z = (end_position.z - start_position.z) * s / length + start_position.z;
+    }};
+
+    Vector3 sample_center_point{};
+    const auto road_heading{std::atan2(end_position.y - start_position.y, end_position.x - start_position.x)};
+    const auto cos_road_heading{std::cos(road_heading)};
+    const auto sin_road_heading{std::sin(road_heading)};
 
     for (int i = 0; i < num_samples; ++i) {
-        const auto sample_x{sample_length * i};
-        road.left_edge.at(i).l.x = sample_x;
-        road.left_edge.at(i).l.y = road_left_edge_y_l;
-        road.left_edge.at(i).l.z = 0;
-        road.left_edge.at(i).r.x = sample_x;
-        road.left_edge.at(i).r.y = road_left_edge_y_r;
-        road.left_edge.at(i).r.z = 0;
+        const auto sample_s{sample_length * i};
+        calc_center_line(sample_s, sample_center_point);
 
-        road.right_edge.at(i).l.x = sample_x;
-        road.right_edge.at(i).l.y = road_right_edge_y_l;
-        road.right_edge.at(i).l.z = 0;
-        road.right_edge.at(i).r.x = sample_x;
-        road.right_edge.at(i).r.y = road_right_edge_y_r;
-        road.right_edge.at(i).r.z = 0;
+        const auto left_edge_offset_r{road_width / 2.0f - half_road_edge_width};
+        const auto left_edge_offset_l{road_width / 2.0f + half_road_edge_width};
+        const auto right_edge_offset_r{-road_width / 2.0f - half_road_edge_width};
+        const auto right_edge_offset_l{-road_width / 2.0f + half_road_edge_width};
+
+        road.left_edge.at(i).l.x = sample_center_point.x + left_edge_offset_l * sin_road_heading;
+        road.left_edge.at(i).l.y = sample_center_point.y + left_edge_offset_l * cos_road_heading;
+        road.left_edge.at(i).l.z = sample_center_point.z;
+        road.left_edge.at(i).r.x = sample_center_point.x + left_edge_offset_r * sin_road_heading;
+        road.left_edge.at(i).r.y = sample_center_point.y + left_edge_offset_r * cos_road_heading;
+        road.left_edge.at(i).r.z = sample_center_point.z;
+
+        road.right_edge.at(i).l.x = sample_center_point.x + right_edge_offset_l * sin_road_heading;
+        road.right_edge.at(i).l.y = sample_center_point.y + right_edge_offset_l * cos_road_heading;
+        road.right_edge.at(i).l.z = sample_center_point.z;
+        road.right_edge.at(i).r.x = sample_center_point.x + right_edge_offset_r * sin_road_heading;
+        road.right_edge.at(i).r.y = sample_center_point.y + right_edge_offset_r * cos_road_heading;
+        road.right_edge.at(i).r.z = sample_center_point.z;
 
         if (!road.lanelets.empty()) {
             for (size_t j = 0; j < road.lanelets.size(); ++j) {
                 auto& lanelet{road.lanelets.at(j)};
-                const auto lane_offset{(j + 1) * lane_width};
-                lanelet.at(i).l.x = sample_x;
-                lanelet.at(i).l.y = road_left_edge_y_l - lane_offset;
-                lanelet.at(i).l.z = 0;
-                lanelet.at(i).r.x = sample_x;
-                lanelet.at(i).r.y = lanelet.at(i).l.y - CARLET_LANELET_WIDTH;
-                lanelet.at(i).r.z = 0;
+                const auto left_lanelet_offset{left_edge_offset_l - (j + 1) * lane_width};
+                lanelet.at(i).l.x = sample_center_point.x + left_lanelet_offset * sin_road_heading;
+                lanelet.at(i).l.y = sample_center_point.y + left_lanelet_offset * cos_road_heading;
+                lanelet.at(i).l.z = sample_center_point.z;
+                const auto right_lanelet_offset{lanelet.at(i).l.y - CARLET_LANELET_WIDTH};
+                lanelet.at(i).r.x = sample_center_point.x + right_lanelet_offset * sin_road_heading;
+                lanelet.at(i).r.y = sample_center_point.y + right_lanelet_offset * cos_road_heading;
+                lanelet.at(i).r.z = sample_center_point.z;
             }
+
             for (int j = 0; j <= static_cast<int>(road.lanelets.size()); ++j) {
                 const auto left_lanelet_idx{j - 1};
                 const auto right_lanelet_idx{j};
 
-                const auto left_edge{left_lanelet_idx < 0
-                    ? road_left_edge_y_l
-                    : road.lanelets.at(left_lanelet_idx).at(i).l.y};
-                const auto right_edge{right_lanelet_idx == road.lanelets.size()
-                    ? road_right_edge_y_r
-                    : road.lanelets.at(right_lanelet_idx).at(i).r.y};
+                const auto& left_edge_point{left_lanelet_idx < 0
+                    ? road.left_edge.at(i).l
+                    : road.lanelets.at(left_lanelet_idx).at(i).l};
+                const auto& right_edge_point{right_lanelet_idx == road.lanelets.size()
+                    ? road.right_edge.at(i).r
+                    : road.lanelets.at(right_lanelet_idx).at(i).r};
 
                 road.lanes.at(j).at(i).width = lane_width;
-                road.lanes.at(j).at(i).c.x = sample_x;
-                road.lanes.at(j).at(i).c.y = (left_edge + right_edge) / 2.0f;
-                road.lanes.at(j).at(i).c.z = 0;
+                road.lanes.at(j).at(i).c.x = (left_edge_point.x + right_edge_point.x) / 2.0f;
+                road.lanes.at(j).at(i).c.y = (left_edge_point.y + right_edge_point.y) / 2.0f;
+                road.lanes.at(j).at(i).c.z = sample_center_point.z;
             }
         } else {
             // single lane road
             road.lanes.at(0).at(i).width = lane_width;
-            road.lanes.at(0).at(i).c.x = sample_x;
-            road.lanes.at(0).at(i).c.y = (road_right_edge_y_l + road_left_edge_y_r) / 2.0f;
-            road.lanes.at(0).at(i).c.z = 0;
+            road.lanes.at(0).at(i).c.x = sample_center_point.x;
+            road.lanes.at(0).at(i).c.y = sample_center_point.y;
+            road.lanes.at(0).at(i).c.z = sample_center_point.z;
         }
     }
 
@@ -820,10 +836,10 @@ int Simulator::create_ctrl_veh(const VehModel& model)
     return ctrl_vehs_.size() - 1;
 }
 
-ControllableVeh& Simulator::get_ctrl_veh(int id)
+ControllableVeh& Simulator::get_ctrl_veh(int idx)
 {
-    assert(id >= 0 || id < ctrl_vehs_.size());
-    return ctrl_vehs_.at(id);
+    assert(idx >= 0 || idx < ctrl_vehs_.size());
+    return ctrl_vehs_.at(idx);
 }
 
 bool Simulator::collision_with_any_veh(const Veh& veh)
