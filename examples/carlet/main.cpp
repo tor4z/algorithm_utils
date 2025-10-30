@@ -19,8 +19,12 @@ int main()
     const int car_idx{sim->create_ctrl_veh(carlet::veh_model::tesla)};
     sim->gen_random_vehs(10);
 
+    carlet::Control ctrl{.steer=0.0f, .accel=0.5f};
     while (sim->is_running()) {
-        sim->get_ctrl_veh(car_idx).act(0.0f, 0.5f);
+        carlet::Veh* v{};
+        if ((v = sim->get_ctrl_veh(car_idx)) != nullptr) {
+            v->act(ctrl);
+        }
         sim->step(0.02f);
         sim->render();
     }

@@ -113,66 +113,65 @@ struct Object
     Vector3 shape;
     Model model;
     Color color;
-private:
     friend class Simulator;
+private:
     virtual bool step(float dt) { return true; }
 }; // struct Object
 
+struct Control
+{
+    float steer;
+    float accel;
+}; // struct Control
+
 struct Veh: public Object
 {
-    Veh(float init_x, float init_y, float init_vel, const VehModel& model)
+    Veh(float init_x, float init_y, float init_vel, const VehModel& model, bool controllable)
         : Object()
+        , dynamic(BicycleModel::State::init_with(init_x, init_y, init_vel), model)
         , steer(0.0f)
         , accel(0.0f)
-        , dynamic(BicycleModel::State::init_with(init_x, init_y, init_vel), model)
+        , controllable_(controllable)
         {}
 
     inline const BicycleModel::State& state() const { return dynamic.state(); }
+    void act(const Control& control);
 
+    BicycleModel dynamic;
     float steer;
     float accel;
-    BicycleModel dynamic;
-private:
     friend class Simulator;
-    virtual bool step(float dt) override;
+private:
+    const bool controllable_;
+
+    void idm_act(const Control& control);
+    bool idm_plan(Control& control);
+    bool step(float dt);
 }; // struct Veh
-
-struct ControllableVeh : public Veh
-{
-    ControllableVeh(float init_x, float init_y, float init_vel, const VehModel& model)
-        : Veh(init_x, init_y, init_vel, model) {}
-    void act(float steer, float accel);
-}; // struct ControllableVehicle
-
-struct IDMVeh : public Veh
-{
-    IDMVeh(float init_x, float init_y, float init_vel, const VehModel& model)
-        : Veh(init_x, init_y, init_vel, model) {}
-}; // struct IDMVeh
 
 class Simulator
 {
     CARLET_DEF_SINGLETON(Simulator)
 public:
-    ~Simulator() = default;
+    ~Simulator();
     bool is_running();
     bool step(float dt);
     void render();
 
     int create_ctrl_veh(const VehModel& model);
-    ControllableVeh& get_ctrl_veh(int idx);
+    Veh* get_ctrl_veh(int idx);
     void gen_random_vehs(int n);
     inline Map& map() { return map_; }
 private:
     Simulator();
     void map_to_mesh_model();
     void update_camera();
-    bool collision_with_any_veh(const Veh& veh);
+    bool collision_with_any_veh(const Veh* veh);
 
-    Map map_;
-    std::vector<IDMVeh> idm_vehs_;
-    std::vector<ControllableVeh> ctrl_vehs_;
+    std::vector<Veh*> vehs_;
     Camera3D camera_;
+    Map map_;
+    int first_controllable_idx_;
 }; // class Simulator
 
 namespace veh_model {
@@ -308,7 +307,7 @@ inline constexpr T rad_to_deg(T rad) { return rad / M_PI * 180.0; }
 template<typename T>
 inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * M_PI; }
 
-bool check_veh_collision(const Veh& a, const Veh& b);
+bool check_veh_collision(const Veh* a, const Veh* b);
 
 template<typename T>
 inline T rand_ab(T a, T b)
@@ -698,6 +697,7 @@ void Simulator::map_to_mesh_model()
 }
 
 Simulator::Simulator()
+    : first_controllable_idx_(-1)
 {
     InitWindow(CARLET_WIN_WIDTH, CARLET_WIN_HEIGHT, CARLET_WIN_TITLE);
     SetTargetFPS(CARLET_TARGET_FPS);
@@ -707,6 +707,14 @@ Simulator::Simulator()
     camera_.up          = {.x=0.0f, .y=1.0f, .z=0.0f};
     camera_.fovy        = 45.0f;
     camera_.projection  = CAMERA_PERSPECTIVE;
+}
+
+Simulator::~Simulator()
+{
+    for (auto v: vehs_) {
+        delete v;
+    }
+    vehs_.clear();
 }
 
 void Simulator::update_camera()
@@ -722,13 +730,13 @@ void Simulator::update_camera()
     static Vector3 camera_pos_offset{camera_.position};
     static Vector3 camera_target_offset{camera_.target};
 
-    if (!ctrl_vehs_.empty()) {
+    if (!vehs_.empty() && first_controllable_idx_ >= 0) {
         // camera follow this first controllable car    
-        const auto& veh{ctrl_vehs_.at(0)};
-        camera_.target.z = camera_target_offset.z - veh.state().x - 80;
+        const auto& veh{vehs_.at(first_controllable_idx_)};
+        camera_.target.z = camera_target_offset.z - veh->state().x - 80;
         camera_.target.x = camera_target_offset.x;
         camera_.target.y = camera_target_offset.y;
-        camera_.position.z = camera_pos_offset.z - veh.state().x + 20;
+        camera_.position.z = camera_pos_offset.z - veh->state().x + 20;
         camera_.position.x = camera_pos_offset.x;
         camera_.position.y = camera_pos_offset.y;
     } else {
@@ -790,15 +798,10 @@ void Simulator::render()
                 DrawModel(map_.lanelet_model, zero_vec, 1.0f, YELLOW);
             }
             {
-                // draw vehicle
-                for (const auto& veh: ctrl_vehs_) {
-                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
-                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
-                }
-
-                for (const auto& veh: idm_vehs_) {
-                    DrawModel(veh.model, zero_vec, 1.0f, veh.color);
-                    DrawModelWires(veh.model, zero_vec, 1.0f, WHITE);
+                // draw vehicles
+                for (const auto& veh: vehs_) {
+                    DrawModel(veh->model, zero_vec, 1.0f, veh->color);
+                    DrawModelWires(veh->model, zero_vec, 1.0f, WHITE);
                 }
             }
             // DrawGrid(10, 1.0f);
@@ -807,14 +810,14 @@ void Simulator::render()
         // Draw in 2d space
         {
             // Show veh speed
-            if (!ctrl_vehs_.empty()) {
-                const auto& veh{ctrl_vehs_.at(0)};
+            if (!vehs_.empty() && first_controllable_idx_ >= 0) {
+                const auto veh{vehs_.at(first_controllable_idx_)};
                 constexpr auto font_size{40};
                 constexpr auto buf_size{32};
                 constexpr auto str_len{8};   // I guess
                 constexpr auto str_position_x{CARLET_WIN_WIDTH / 2 - (str_len / 2) * font_size / 2};
                 char buf[buf_size];
-                snprintf(buf, buf_size, "%.1f KM/H", mps_to_kmph(veh.state().vel));
+                snprintf(buf, buf_size, "%.1f KM/H", mps_to_kmph(veh->state().vel));
                 DrawText(buf, str_position_x, 10, font_size, RED);
             }
         }
@@ -823,33 +826,31 @@ void Simulator::render()
 
 int Simulator::create_ctrl_veh(const VehModel& model)
 {
-    ControllableVeh veh{0.0f, 0.0f, 0.0f, model};
-    veh.shape.x = CARLET_DEF_VEH_LEN;
-    veh.shape.y = CARLET_DEF_VEH_WIDTH;
-    veh.shape.z = CARLET_DEF_VEH_HEIGHT;
+    auto veh{new Veh{0.0f, 0.0f, 0.0f, model, true}};
+    veh->shape.x = CARLET_DEF_VEH_LEN;
+    veh->shape.y = CARLET_DEF_VEH_WIDTH;
+    veh->shape.z = CARLET_DEF_VEH_HEIGHT;
     auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
     UploadMesh(&mesh, true);
-    veh.model = LoadModelFromMesh(mesh);
-    veh.color = next_color();
+    veh->model = LoadModelFromMesh(mesh);
+    veh->color = next_color();
 
-    ctrl_vehs_.push_back(veh);
-    return ctrl_vehs_.size() - 1;
+    vehs_.push_back(veh);
+    first_controllable_idx_ = vehs_.size() - 1;
+    return first_controllable_idx_;
 }
 
-ControllableVeh& Simulator::get_ctrl_veh(int idx)
+Veh* Simulator::get_ctrl_veh(int idx)
 {
-    assert(idx >= 0 || idx < ctrl_vehs_.size());
-    return ctrl_vehs_.at(idx);
-}
-
-bool Simulator::collision_with_any_veh(const Veh& veh)
-{
-    for (const auto& other_veh: idm_vehs_) {
-        if (check_veh_collision(veh, other_veh)) {
-            return true;
-        }
+    if (idx < 0 || idx >= vehs_.size()) {
+        return nullptr;
     }
-    for (const auto& other_veh: ctrl_vehs_) {
+    return vehs_.at(idx);
+}
+
+bool Simulator::collision_with_any_veh(const Veh* veh)
+{
+    for (const auto other_veh: vehs_) {
         if (check_veh_collision(veh, other_veh)) {
             return true;
         }
@@ -875,20 +876,20 @@ void Simulator::gen_random_vehs(int n)
             const auto& waypoing{target_lane.at(sample_idx)};
             const auto veh_vel{rand_ab(min_spd, max_spd)};
 
-            IDMVeh veh{waypoing.c.x, waypoing.c.y, veh_vel, veh_model::random()};
+            Veh veh{waypoing.c.x, waypoing.c.y, veh_vel, veh_model::random(), false};
             veh.shape.x = CARLET_DEF_VEH_LEN;
             veh.shape.y = CARLET_DEF_VEH_WIDTH;
             veh.shape.z = CARLET_DEF_VEH_HEIGHT;
 
             // collision check
-            if (collision_with_any_veh(veh)) continue;
+            if (collision_with_any_veh(&veh)) continue;
 
             // properties for rendering
             auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
             UploadMesh(&mesh, true);
             veh.color = next_color();
             veh.model = LoadModelFromMesh(mesh);
-            idm_vehs_.push_back(veh);
+            vehs_.push_back(new Veh(veh));
             ++i;
         }
     }
@@ -896,19 +897,41 @@ void Simulator::gen_random_vehs(int n)
 
 bool Simulator::step(float dt)
 {
-    for (auto& veh: ctrl_vehs_) {
-        veh.step(dt);
-    }
-    for (auto& veh: idm_vehs_) {
-        veh.step(dt);
+    Control idm_control;
+    for (auto& veh: vehs_) {
+        if (veh->controllable_) {
+            veh->step(dt);
+            continue;
+        }
+
+        // for idm step
+        if (veh->idm_plan(idm_control)) {
+            veh->idm_act(idm_control);
+            veh->step(dt);
+        }
     }
     return true;
 }
 
-void ControllableVeh::act(float steer, float accel)
+bool Veh::idm_plan(Control& control)
 {
-    this->steer = steer;
-    this->accel = accel;
+    control.steer = 0.0f;
+    control.accel = 0.0f;
+    return true;
+}
+
+void Veh::idm_act(const Control& control)
+{
+    steer = control.steer;
+    accel = control.accel;
+}
+
+void Veh::act(const Control& control)
+{
+    assert(controllable_ &&
+        "Bad operation. Try to take a action on uncontrollable vehicle.");
+    steer = control.steer;
+    accel = control.accel;
 }
 
 bool Veh::step(float dt)
@@ -938,21 +961,21 @@ void BicycleModel::act(float steer, float accel, float dt)
     state_.yaw += state_.yaw_rate * dt;
 }
 
-bool check_veh_collision(const Veh& a, const Veh& b)
+bool check_veh_collision(const Veh* a, const Veh* b)
 {
     constexpr float min_veh_space{0.5f}; // meter
 
-    if (a.id == b.id) return false;
+    if (a->id == b->id) return false;
 
-    const auto a_yaw{a.state().yaw};
-    const auto a_hw{a.shape.y / 2.0f}; // half width
-    const auto a_hl{a.shape.x / 2.0f}; // half length
-    const Vector2 a_center{.x=static_cast<float>(a.state().x), .y=static_cast<float>(a.state().y)};
+    const auto a_yaw{a->state().yaw};
+    const auto a_hw{a->shape.y / 2.0f}; // half width
+    const auto a_hl{a->shape.x / 2.0f}; // half length
+    const Vector2 a_center{.x=static_cast<float>(a->state().x), .y=static_cast<float>(a->state().y)};
 
-    const auto b_yaw{b.state().yaw};
-    const auto b_hw{b.shape.y / 2.0f}; // half width
-    const auto b_hl{b.shape.x / 2.0f}; // half length
-    const Vector2 b_center{.x=static_cast<float>(b.state().x), .y=static_cast<float>(b.state().y)};
+    const auto b_yaw{b->state().yaw};
+    const auto b_hw{b->shape.y / 2.0f}; // half width
+    const auto b_hl{b->shape.x / 2.0f}; // half length
+    const Vector2 b_center{.x=static_cast<float>(b->state().x), .y=static_cast<float>(b->state().y)};
 
     // quick collision check (naive solution)
     const auto ab_dist{Vector2Distance(a_center, b_center)};
