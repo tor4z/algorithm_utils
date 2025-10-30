@@ -1,7 +1,6 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <iostream>
 #include <mutex>
 #include <vector>
 #include <raylib.h>
@@ -83,15 +82,15 @@ class BicycleModel
 public:
     struct State
     {
-        float x;
-        float y;
-        float z;
-        float vel;
-        float accel;
-        float jerk;
-        float yaw;
-        float yaw_rate;
-        float steer_angle;
+        double x;
+        double y;
+        double z;
+        double vel;
+        double accel;
+        double jerk;
+        double yaw;
+        double yaw_rate;
+        double steer_angle;
 
         static State init_with(float init_x, float init_y, float init_vel);
     }; // struct State
@@ -108,6 +107,9 @@ private:
 
 struct Object
 {
+    Object();
+
+    const int id;
     Vector3 shape;
     Model model;
     Color color;
@@ -119,7 +121,8 @@ private:
 struct Veh: public Object
 {
     Veh(float init_x, float init_y, float init_vel, const VehModel& model)
-        : steer(0.0f)
+        : Object()
+        , steer(0.0f)
         , accel(0.0f)
         , dynamic(BicycleModel::State::init_with(init_x, init_y, init_vel), model)
         {}
@@ -183,7 +186,7 @@ extern const VehModel tesla;
 #endif // CARLET_HPP_
 
 
-#define CARLET_IMPLEMENTATION delete me
+#define CARLET_IMPLEMENTATION // delete me
 
 
 #ifdef CARLET_IMPLEMENTATION
@@ -200,8 +203,18 @@ extern const VehModel tesla;
 
 
 #ifndef CARLET_EPSf
-#   define CARLET_EPSf 1.0e-6f
+#   include <limits>
+#   define CARLET_EPSf              std::numeric_limits<float>::epsilon()
 #endif // CARLET_EPSf
+
+#ifndef CARLET_EPS
+#   include <limits>
+#   define CARLET_EPS               std::numeric_limits<double>::epsilon()
+#endif // CARLET_EPS
+
+#ifndef CARLET_MAX_ID
+#   define CARLET_MAX_ID            100000
+#endif // CARLET_MAX_ID
 
 #ifndef CARLET_TARGET_FPS
 #   define CARLET_TARGET_FPS        60
@@ -220,25 +233,57 @@ extern const VehModel tesla;
 #endif // CARLET_WIN_TITLE
 
 #ifndef CARLET_ROAD_EDGE_WIDTH
-#   define CARLET_ROAD_EDGE_WIDTH   0.1f   // meter, which is 1cm
+#   define CARLET_ROAD_EDGE_WIDTH   0.1f   // meter, which is 10cm
 #endif // CARLET_ROAD_EDGE_WIDTH
 
 #ifndef CARLET_LANELET_WIDTH
-#   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 1cm
+#   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 10cm
 #endif // CARLET_LANELET_WIDTH
 
 #ifndef CARLET_DEF_VEH_LEN
-#   define CARLET_DEF_VEH_LEN       4.2f
+#   define CARLET_DEF_VEH_LEN       4.2f    // meter
 #endif // CARLET_DEF_VEH_LEN
 
 #ifndef CARLET_DEF_VEH_WIDTH
-#   define CARLET_DEF_VEH_WIDTH     1.98f
+#   define CARLET_DEF_VEH_WIDTH     1.98f   // meter
 #endif // CARLET_DEF_VEH_WIDTH
 
 #ifndef CARLET_DEF_VEH_HEIGHT
-#   define CARLET_DEF_VEH_HEIGHT     1.6f
+#   define CARLET_DEF_VEH_HEIGHT    1.6f    // meter
 #endif // CARLET_DEF_VEH_HEIGHT
 
+#define CARLET_ARR_LEN(arr)         (sizeof(arr) / sizeof((arr)[0]))
+
+
+#ifdef _GLIBCXX_OSTREAM
+inline std::ostream& operator<<(std::ostream& os, const Vector2& vec)
+{
+    os << "(" << vec.x << ", " << vec.y << ")";
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const Vector3& vec)
+{
+    os << "(" << vec.x << ", " << vec.y << ", " << vec.z << ")";
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const BicycleModel::State& state)
+{
+    os << std::fixed << std::setprecision(2) << "State {"
+       << "x: " << state.x
+       << ", y: " << state.y
+       << ", z: " << state.z
+       << ", vel: " << state.vel
+       << ", accel: " << state.accel
+       << ", jerk: " << state.jerk
+       << ", yaw: " << state.yaw
+       << ", yaw_rate: " << state.yaw_rate
+       << ", steer_angle: " << state.steer_angle
+       << "}";
+    return os;
+}
+#endif // _GLIBCXX_OSTREAM
 
 namespace carlet {
 
@@ -249,7 +294,7 @@ template<typename T>
 inline constexpr T max(T a, T b) { return a > b ? a : b; }
 
 template<typename T>
-inline constexpr T clamp(T v, T low, T high) { return v > high ? high : v < low ? low : v; }
+inline constexpr T clamp(T v, T low, T high) { return v > high ? high : (v < low ? low : v); }
 
 template<typename T>
 inline constexpr T mps_to_kmph(T mps) { return mps * static_cast<T>(3.6); }
@@ -286,8 +331,8 @@ static const VehModel all_veh_models[] {
     tesla
 };
 
-const VehModel& random() {
-    constexpr auto num_models{sizeof(all_veh_models) / sizeof(all_veh_models[0])};
+inline const VehModel& random() {
+    constexpr auto num_models{CARLET_ARR_LEN(all_veh_models)};
     return all_veh_models[rand() % num_models];
 }
 
@@ -300,40 +345,20 @@ static const Color veh_colors[] {
     MAGENTA, RAYWHITE
 };
 
-#ifdef _GLIBCXX_OSTREAM
-inline std::ostream& operator<<(std::ostream& os, const Vector2& vec)
-{
-    os << "(" << vec.x << ", " << vec.y << ")";
-    return os;
-}
-
-inline std::ostream& operator<<(std::ostream& os, const Vector3& vec)
-{
-    os << "(" << vec.x << ", " << vec.y << ", " << vec.z << ")";
-    return os;
-}
-
-inline std::ostream& operator<<(std::ostream& os, const BicycleModel::State& state)
-{
-    os << std::fixed << std::setprecision(2) << "State {"
-       << "x: " << state.x
-       << ", y: " << state.y
-       << ", z: " << state.z
-       << ", vel: " << state.vel
-       << ", accel: " << state.accel
-       << ", jerk: " << state.jerk
-       << ", yaw: " << state.yaw
-       << ", yaw_rate: " << state.yaw_rate
-       << ", steer_angle: " << state.steer_angle
-       << "}";
-    return os;
-}
-#endif // _GLIBCXX_OSTREAM
-
 inline const Color& random_color()
 {
-    constexpr auto num_colors{sizeof(veh_colors) / sizeof(veh_colors[0])};
+    constexpr auto num_colors{CARLET_ARR_LEN(veh_colors)};
     return veh_colors[rand() % num_colors];
+}
+
+inline const Color& next_color()
+{
+    constexpr auto num_colors{CARLET_ARR_LEN(veh_colors)};
+
+    static int i{0};
+    static std::mutex lock{};
+    std::lock_guard<std::mutex> guard{lock};
+    return veh_colors[i++ % num_colors];
 }
 
 inline void to_raylib_mesh3(float* vec)
@@ -350,6 +375,19 @@ inline Vector3 to_raylib(const Vector3& vec)
 {
     return Vector3{.x = -vec.y, .y = vec.x, .z = vec.z};
 }
+
+inline int gen_id()
+{
+    static int cnt{0};
+    static std::mutex lock{};
+
+    std::lock_guard<std::mutex> guard{lock};
+    int result{cnt};
+    cnt = (cnt + 1) % CARLET_MAX_ID;
+    return result;
+}
+
+Object::Object() : id(gen_id()) {}
 
 BicycleModel::State BicycleModel::State::init_with(float init_x, float init_y, float init_vel)
 {
@@ -648,16 +686,16 @@ Simulator::Simulator()
     InitWindow(CARLET_WIN_WIDTH, CARLET_WIN_HEIGHT, CARLET_WIN_TITLE);
     SetTargetFPS(CARLET_TARGET_FPS);
 
-    camera_.position    = {0.0f, 5.0f, 0.0f};
-    camera_.target      = {0.0f, 0.0f, 0.0f};
-    camera_.up          = {0.0f, 1.0f, 0.0f};
+    camera_.position    = {.x=0.0f, .y=5.0f, .z=0.0f};
+    camera_.target      = {.x=0.0f, .y=0.0f, .z=0.0f};
+    camera_.up          = {.x=0.0f, .y=1.0f, .z=0.0f};
     camera_.fovy        = 45.0f;
     camera_.projection  = CAMERA_PERSPECTIVE;
 }
 
 void Simulator::update_camera()
 {
-    camera_.fovy += GetMouseWheelMove() * -5;
+    camera_.fovy += GetMouseWheelMove() * -5.0f;
     camera_.fovy = clamp(camera_.fovy, 0.0f, 170.0f);
 
     static int last_left_down_x{-1};
@@ -670,12 +708,11 @@ void Simulator::update_camera()
 
     if (!ctrl_vehs_.empty()) {
         // camera follow this first controllable car    
-        const auto veh{ctrl_vehs_.at(0)};
-        const Vector3 veh_position{.x = veh.state().x, .y = veh.state().y, .z = veh.state().z};
-        camera_.target.z = camera_target_offset.z + -veh_position.x - 80;
+        const auto& veh{ctrl_vehs_.at(0)};
+        camera_.target.z = camera_target_offset.z - veh.state().x - 80;
         camera_.target.x = camera_target_offset.x;
         camera_.target.y = camera_target_offset.y;
-        camera_.position.z = camera_pos_offset.z - veh_position.y + 20;
+        camera_.position.z = camera_pos_offset.z - veh.state().x + 20;
         camera_.position.x = camera_pos_offset.x;
         camera_.position.y = camera_pos_offset.y;
     } else {
@@ -777,7 +814,7 @@ int Simulator::create_ctrl_veh(const VehModel& model)
     auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
     UploadMesh(&mesh, true);
     veh.model = LoadModelFromMesh(mesh);
-    veh.color = random_color();
+    veh.color = next_color();
 
     ctrl_vehs_.push_back(veh);
     return ctrl_vehs_.size() - 1;
@@ -806,8 +843,8 @@ bool Simulator::collision_with_any_veh(const Veh& veh)
 
 void Simulator::gen_random_vehs(int n)
 {
-    constexpr auto min_spd{kmph_to_mps(20.0f /* kmph */)};
-    constexpr auto max_spd{kmph_to_mps(80.0f /* kmph */)};
+    constexpr auto min_spd{kmph_to_mps(20.0f /* kmph */)};  // mps
+    constexpr auto max_spd{kmph_to_mps(80.0f /* kmph */)};  // mps
 
     const auto& roads{map_.road_net.roads};
     const auto num_roads{roads.size()};
@@ -833,7 +870,7 @@ void Simulator::gen_random_vehs(int n)
             // properties for rendering
             auto mesh{GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN)};
             UploadMesh(&mesh, true);
-            veh.color = random_color();
+            veh.color = next_color();
             veh.model = LoadModelFromMesh(mesh);
             idm_vehs_.push_back(veh);
             ++i;
@@ -878,7 +915,7 @@ void BicycleModel::act(float steer, float accel, float dt)
     const auto vel_angle{slip_angle + state_.yaw};
     const auto dy{state_.vel * std::sin(vel_angle)};
     const auto dx{state_.vel * std::cos(vel_angle)};
-    const auto r{vm_.wheel_base / (std::tan(state_.steer_angle) * std::cos(slip_angle) + CARLET_EPSf)};
+    const auto r{vm_.wheel_base / (std::tan(state_.steer_angle) * std::cos(slip_angle) + CARLET_EPS)};
     state_.x += dx * dt;
     state_.y += dy * dt;
     state_.yaw_rate = state_.vel / r;
@@ -889,15 +926,17 @@ bool check_veh_collision(const Veh& a, const Veh& b)
 {
     constexpr float min_veh_space{0.5f}; // meter
 
+    if (a.id == b.id) return false;
+
     const auto a_yaw{a.state().yaw};
     const auto a_hw{a.shape.y / 2.0f}; // half width
     const auto a_hl{a.shape.x / 2.0f}; // half length
-    const Vector2 a_center{a.state().x, a.state().y};
+    const Vector2 a_center{.x=static_cast<float>(a.state().x), .y=static_cast<float>(a.state().y)};
 
     const auto b_yaw{b.state().yaw};
     const auto b_hw{b.shape.y / 2.0f}; // half width
     const auto b_hl{b.shape.x / 2.0f}; // half length
-    const Vector2 b_center{b.state().x, b.state().y};
+    const Vector2 b_center{.x=static_cast<float>(b.state().x), .y=static_cast<float>(b.state().y)};
 
     // quick collision check (naive solution)
     const auto ab_dist{Vector2Distance(a_center, b_center)};

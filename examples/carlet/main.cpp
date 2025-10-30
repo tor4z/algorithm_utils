@@ -10,7 +10,7 @@ int main()
 
     const auto straight_road{carlet::Road::gen_straight(
         Vector3{.x = 0.0f, .y = 0.0f, .z=0.0f},
-        50.0f, 3, 3.7f)};
+        5000.0f, 3, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.roads.push_back(straight_road);
