@@ -1,6 +1,5 @@
-#include <cstdlib>
 #include <ctime>
-#include <iostream>
+#include <cstdlib>
 
 #define CARLET_IMPLEMENTATION
 #include "carlet.hpp"
@@ -132,13 +131,6 @@ void plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::
     }
 }
 
-float calc_stop_dist(float from_v, float to_v, float max_accel)
-{
-    const auto min_t{(to_v - from_v) / max_accel};
-    std::cout << "t: " << min_t << "\n";
-    return from_v * min_t + 0.5f * max_accel * carlet::pow2(min_t) - min_t * to_v;
-}
-
 int main()
 {
     srand(time(NULL));
@@ -146,11 +138,11 @@ int main()
     const auto straight_road{carlet::Road::gen_straight(
         Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
         Vector3{.x=5000.0f, .y=0.0f, .z=0.0f},
-        3, 3.7f)};
+        4, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
-    sim->create_ctrl_veh(carlet::veh_model::tesla);
+    sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
     sim->gen_random_vehs(150,
         carlet::kmph_to_mps(40.0),
         carlet::kmph_to_mps(120.0));

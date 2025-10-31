@@ -1,6 +1,8 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
+#include <cstddef>
+#include <iostream>
 #include <mutex>
 #include <cmath>
 #include <vector>
@@ -156,7 +158,7 @@ public:
     void render();
 
     Veh::Obs full_obs() { return Veh::Obs{.vehs=vehs_, .map=map_}; }
-    int create_ctrl_veh(const VehModel& model);
+    int create_ctrl_veh(const VehModel& model, int lane_idx);
     void gen_random_vehs(int n, float min_vel, float max_vel);
     Veh* get_ctrl_veh(int idx) const;
     inline Veh* get_ctrl_veh() const { return get_ctrl_veh(first_controllable_idx_); };
@@ -854,9 +856,22 @@ const Mesh& gen_veh_mesh()
     return mesh;
 }
 
-int Simulator::create_ctrl_veh(const VehModel& model)
+int Simulator::create_ctrl_veh(const VehModel& model, int lane_idx)
 {
-    auto veh{new Veh{0.0f, 0.0f, 0.0f, model, true}};
+    float init_x{0.0f};
+    float init_y{0.0f};
+
+    if (lane_idx >= 0) {
+        assert(!map_.road_net.empty());
+        const auto& first_road{map_.road_net.at(0)};
+        assert(lane_idx < first_road.lanes.size());
+        const auto& lane{first_road.lanes.at(lane_idx)};
+        assert(!lane.empty());
+        init_x = lane.at(0).c.x;
+        init_y = lane.at(0).c.y;
+    }
+
+    auto veh{new Veh{init_x, init_y, 0.0f, model, true}};
     veh->shape.x = CARLET_DEF_VEH_LEN;
     veh->shape.y = CARLET_DEF_VEH_WIDTH;
     veh->shape.z = CARLET_DEF_VEH_HEIGHT;
@@ -982,7 +997,7 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 
     {
         // latitude
-        float min_dist{5.0f};
+        float min_dist{3.0f};
         const carlet::Road::LaneSample* curr_waypoint{nullptr};
         const Vector3 ego_preview{
             .x=static_cast<float>(state().x + preview_length * std::cos(state().yaw)),
@@ -991,13 +1006,37 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
         };
 
         for (const auto& road: obs.map.road_net) {
+            if (road.lanes.empty()) continue;
+
             for (const auto& lane: road.lanes) {
-                for (const auto& waypoint : lane) {
-                    const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
-                    if (this_dist < min_dist) {
-                        min_dist = this_dist;
-                        curr_waypoint = &waypoint;
+                if (lane.empty()) continue;
+
+                size_t low{0};
+                size_t high{lane.size() - 1};
+                while (low <= high) {
+                    const auto mid{(low + high) / 2};
+                    const auto& waypoint_low{lane.at(low)};
+                    const auto& waypoint_high{lane.at(high)};
+                    if (low >= high) {
+                        const auto& min_waypoint{lane.at(mid)};
+                        const auto dist{Vector3Distance(ego_preview, min_waypoint.c)};
+                        if (dist < min_dist) {
+                            min_dist = dist;
+                            curr_waypoint = &min_waypoint;
+                        }
                     }
+                    const auto low_dist{Vector3Distance(ego_preview, waypoint_low.c)};
+                    const auto high_dist{Vector3Distance(ego_preview, waypoint_high.c)};
+                    if (low_dist < high_dist) {
+                        high = mid - 1;
+                    } else {
+                        low = mid + 1;
+                    }
+                }
+
+                if (min_dist < lane.at(0).width / 2.0f) {
+                    // early stop
+                    break;
                 }
             }
         }
