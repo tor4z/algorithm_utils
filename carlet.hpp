@@ -1,7 +1,6 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <iostream>
 #include <mutex>
 #include <cmath>
 #include <vector>
@@ -85,7 +84,6 @@ struct Object
     const int id;
     Vector3 shape;
     Model model;
-    Mesh mesh;
     Color color;
     friend class Simulator;
 private:
@@ -843,15 +841,26 @@ void Simulator::render()
     EndDrawing();
 }
 
+const Mesh& gen_veh_mesh()
+{
+    static bool mesh_uploaded{false};
+    static Mesh mesh;
+
+    if (!mesh_uploaded) {
+        mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
+        UploadMesh(&mesh, false);
+        mesh_uploaded = true;
+    }
+    return mesh;
+}
+
 int Simulator::create_ctrl_veh(const VehModel& model)
 {
     auto veh{new Veh{0.0f, 0.0f, 0.0f, model, true}};
     veh->shape.x = CARLET_DEF_VEH_LEN;
     veh->shape.y = CARLET_DEF_VEH_WIDTH;
     veh->shape.z = CARLET_DEF_VEH_HEIGHT;
-    veh->mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
-    UploadMesh(&veh->mesh, true);
-    veh->model = LoadModelFromMesh(veh->mesh);
+    veh->model = LoadModelFromMesh(gen_veh_mesh());
     veh->color = next_color();
 
     vehs_.push_back(veh);
@@ -902,10 +911,8 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
             if (collision_with_any_veh(&veh)) continue;
 
             // properties for rendering
-            veh.mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
-            UploadMesh(&veh.mesh, true);
             veh.color = next_color();
-            veh.model = LoadModelFromMesh(veh.mesh);
+            veh.model = LoadModelFromMesh(gen_veh_mesh());
             vehs_.push_back(new Veh(veh));
             ++i;
         }
