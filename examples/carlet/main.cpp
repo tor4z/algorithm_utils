@@ -8,8 +8,62 @@
 
 constexpr double target_spd{carlet::kmph_to_mps(120.0)};
 
+int get_lane_idx(const carlet::Veh::Obs& obs, const carlet::Veh::State& state)
+{
+    int target_idx{-1};
+    float min_dist{2.0f};
+    const Vector3 ego_pose{
+        .x=static_cast<float>(state.x),
+        .y=static_cast<float>(state.y),
+        .z=static_cast<float>(state.z)
+    };
+    for (const auto& road: obs.map.road_net) {
+        for (size_t i = 0; i < road.lanes.size(); ++i) {
+            const auto& lane{road.lanes.at(i)};
+            for (const auto& waypoint : lane) {
+                const auto this_dist{Vector3Distance(ego_pose, waypoint.c)};
+                if (this_dist < min_dist) {
+                    min_dist = this_dist;
+                    target_idx = i;
+                }
+            }
+        }
+    }
 
-void plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+    return target_idx;
+}
+
+void lka(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+{
+    const carlet::Road::LaneSample* curr_waypoint{nullptr};
+    float min_dist{5.0f};
+    const auto preview_length{20.0f};
+    const auto target_lane_idx{get_lane_idx(obs, state)};
+    const Vector3 ego_preview{
+        .x=static_cast<float>(state.x + preview_length * std::cos(state.yaw)),
+        .y=static_cast<float>(state.y + preview_length * std::sin(state.yaw)),
+        .z=static_cast<float>(state.z)
+    };
+
+    if (target_lane_idx >= 0) {
+        const auto lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
+        for (const auto& waypoint : lane) {
+            const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
+            if (this_dist < min_dist) {
+                min_dist = this_dist;
+                curr_waypoint = &waypoint;
+            }
+        }
+    }
+
+    ctrl.steer = 0.0f;
+    if (curr_waypoint) {
+        const auto error{ego_preview.y - curr_waypoint->c.y};
+        ctrl.steer = -error * 0.01;
+    }
+}
+
+void acc(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
     carlet::Veh* lead{nullptr};
     for (const auto veh: obs.vehs) {
@@ -36,7 +90,46 @@ void plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::
     }
 
     ctrl.accel = carlet::min(ctrl.accel, 2.0f);
+}
+
+void ch_lane(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl, int target_lane_idx)
+{
+    if (target_lane_idx < 0) {
+        return;
+    }
+
+    const carlet::Road::LaneSample* curr_waypoint{nullptr};
+    const auto preview_length{30.0f};
+    float min_dist{5.0f};
+    const auto& lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
+    const Vector3 ego_preview{
+        .x=static_cast<float>(state.x + preview_length * std::cos(state.yaw)),
+        .y=static_cast<float>(state.y + preview_length * std::sin(state.yaw)),
+        .z=static_cast<float>(state.z)
+    };
+    for (const auto& waypoint : lane) {
+        const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
+        if (this_dist < min_dist) {
+            min_dist = this_dist;
+            curr_waypoint = &waypoint;
+        }
+    }
+
     ctrl.steer = 0.0f;
+    if (curr_waypoint) {
+        const auto error{ego_preview.y - curr_waypoint->c.y};
+        ctrl.steer = -error * 0.01;
+    }
+}
+
+void plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+{
+    acc(obs, state, ctrl);
+    if (state.x > 100.0f) {
+        ch_lane(obs, state, ctrl, 0);
+    } else {
+        lka(obs, state, ctrl);
+    }
 }
 
 float calc_stop_dist(float from_v, float to_v, float max_accel)

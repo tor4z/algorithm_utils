@@ -933,38 +933,74 @@ bool Simulator::step(float dt)
 
 bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 {
-    carlet::Veh* lead{nullptr};
-    for (const auto veh: obs.vehs) {
-        if (!veh) continue;
-        if (veh->id == id) continue;
-        if (veh->state().x < state().x) continue;
-        if (carlet::abs(veh->state().y - state().y) > 2.0f) continue;
-        if (carlet::abs(veh->state().x - state().x) < 2.0f) continue; // ego
-        if (lead && veh->state().x > lead->state().x) continue;
-        lead = veh;
-    }
+    ctrl.steer = 0.0f;
+    ctrl.accel = 0.0f;
 
+    const auto preview_length{30.0f};
+    const auto steer_pid_p{0.01f};
     const auto cruise_pid_p{0.1f};
     const auto follow_pid_dist_p{0.2f};
     const auto follow_pid_vel_p{0.6f};
     const auto max_cruise_accel{2.0f};
-    const auto target_ht{2.5};
+    const auto target_ht{2.5f};
 
-    if (!lead || lead->state().vel > idm_cruise_vel_) {
-        const auto cruise_error{idm_cruise_vel_ - state().vel};
-        ctrl.accel = cruise_error * cruise_pid_p;
-    } else {
-        const auto x_diff{lead->state().x - state().x};
-        const auto ht{x_diff / state().vel};
-        const auto desire_x{target_ht * state().vel};
-        const auto dist_error{x_diff - desire_x};
-        const auto vel_error{lead->state().vel - state().vel};
-        ctrl.accel = dist_error * follow_pid_dist_p + vel_error * follow_pid_vel_p;
-        if (state().vel > idm_cruise_vel_) ctrl.accel = min(0.0f, ctrl.accel);
+    {
+        // longitude
+        carlet::Veh* lead{nullptr};
+        for (const auto veh: obs.vehs) {
+            if (!veh) continue;
+            if (veh->id == id) continue;
+            if (veh->state().x < state().x) continue;
+            if (carlet::abs(veh->state().y - state().y) > 2.0f) continue;
+            if (carlet::abs(veh->state().x - state().x) < 2.0f) continue; // ego
+            if (lead && veh->state().x > lead->state().x) continue;
+            lead = veh;
+        }
+
+        if (!lead || lead->state().vel > idm_cruise_vel_) {
+            const auto cruise_error{idm_cruise_vel_ - state().vel};
+            ctrl.accel = cruise_error * cruise_pid_p;
+        } else {
+            const auto x_diff{lead->state().x - state().x};
+            const auto ht{x_diff / state().vel};
+            const auto desire_x{target_ht * state().vel};
+            const auto dist_error{x_diff - desire_x};
+            const auto vel_error{lead->state().vel - state().vel};
+            ctrl.accel = dist_error * follow_pid_dist_p + vel_error * follow_pid_vel_p;
+            if (state().vel > idm_cruise_vel_) ctrl.accel = min(0.0f, ctrl.accel);
+        }
+
+        ctrl.accel = carlet::min(ctrl.accel, max_cruise_accel);
     }
 
-    ctrl.accel = carlet::min(ctrl.accel, max_cruise_accel);
-    ctrl.steer = 0.0f;
+    {
+        // latitude
+        float min_dist{5.0f};
+        const carlet::Road::LaneSample* curr_waypoint{nullptr};
+        const Vector3 ego_preview{
+            .x=static_cast<float>(state().x + preview_length * std::cos(state().yaw)),
+            .y=static_cast<float>(state().y + preview_length * std::sin(state().yaw)),
+            .z=static_cast<float>(state().z)
+        };
+
+        for (const auto& road: obs.map.road_net) {
+            for (const auto& lane: road.lanes) {
+                for (const auto& waypoint : lane) {
+                    const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
+                    if (this_dist < min_dist) {
+                        min_dist = this_dist;
+                        curr_waypoint = &waypoint;
+                    }
+                }
+            }
+        }
+
+        if (curr_waypoint) {
+            const auto error{ego_preview.y - curr_waypoint->c.y};
+            ctrl.steer = -error * steer_pid_p;
+        }
+    }
+
     return true;
 }
 
@@ -994,6 +1030,9 @@ bool Veh::step(float dt)
 
 void Veh::dynamic_act(float steer, float accel, float dt)
 {
+    constexpr auto steer_error{0.0002};
+
+    if (steer > 0) steer += steer_error; else steer -= steer_error;
     state_.steer_angle = steer;
     state_.vel += accel * dt;
     state_.accel = accel;
