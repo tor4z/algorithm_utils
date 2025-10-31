@@ -1,6 +1,7 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
+#include <iostream>
 #include <mutex>
 #include <cmath>
 #include <vector>
@@ -158,7 +159,7 @@ public:
 
     Veh::Obs full_obs() { return Veh::Obs{.vehs=vehs_, .map=map_}; }
     int create_ctrl_veh(const VehModel& model);
-    void gen_random_vehs(int n);
+    void gen_random_vehs(int n, float min_vel, float max_vel);
     Veh* get_ctrl_veh(int idx) const;
     inline Veh* get_ctrl_veh() const { return get_ctrl_veh(first_controllable_idx_); };
     inline Map& map() { return map_; }
@@ -173,6 +174,12 @@ private:
     Map map_;
     int first_controllable_idx_;
 }; // class Simulator
+
+template<typename T>
+inline constexpr T pow2(T v) { return v * v; }
+
+template<typename T>
+inline constexpr T pow3(T v) { return v * v *v; }
 
 template<typename T>
 inline constexpr T min(T a, T b) { return a > b ? b : a; }
@@ -871,11 +878,8 @@ bool Simulator::collision_with_any_veh(const Veh* veh)
     return false;
 }
 
-void Simulator::gen_random_vehs(int n)
+void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
 {
-    constexpr auto min_spd{kmph_to_mps(20.0f /* kmph */)};  // mps
-    constexpr auto max_spd{kmph_to_mps(80.0f /* kmph */)};  // mps
-
     const auto& roads{map_.road_net};
     const auto num_roads{roads.size()};
     const auto num_veh_each_road{n / num_roads};
@@ -887,7 +891,7 @@ void Simulator::gen_random_vehs(int n)
             const auto& target_lane{road.lanes.at(lane_idx)};
             const auto sample_idx{rand_ab(0ul, target_lane.size())};
             const auto& waypoint{target_lane.at(sample_idx)};
-            const auto veh_vel{rand_ab(min_spd, max_spd)};
+            const auto veh_vel{rand_ab(min_vel, max_vel)};
 
             Veh veh{waypoint.c.x, waypoint.c.y, veh_vel, veh_model::random(), false};
             veh.shape.x = CARLET_DEF_VEH_LEN;
@@ -927,10 +931,40 @@ bool Simulator::step(float dt)
     return true;
 }
 
-bool Veh::idm_plan(const Veh::Obs& full_obs, Control& control)
+bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 {
-    control.steer = 0.0f;
-    control.accel = 0.0f;
+    carlet::Veh* lead{nullptr};
+    for (const auto veh: obs.vehs) {
+        if (!veh) continue;
+        if (veh->id == id) continue;
+        if (veh->state().x < state().x) continue;
+        if (carlet::abs(veh->state().y - state().y) > 2.0f) continue;
+        if (carlet::abs(veh->state().x - state().x) < 2.0f) continue; // ego
+        if (lead && veh->state().x > lead->state().x) continue;
+        lead = veh;
+    }
+
+    const auto cruise_pid_p{0.1f};
+    const auto follow_pid_dist_p{0.2f};
+    const auto follow_pid_vel_p{0.6f};
+    const auto max_cruise_accel{2.0f};
+    const auto target_ht{2.5};
+
+    if (!lead || lead->state().vel > idm_cruise_vel_) {
+        const auto cruise_error{idm_cruise_vel_ - state().vel};
+        ctrl.accel = cruise_error * cruise_pid_p;
+    } else {
+        const auto x_diff{lead->state().x - state().x};
+        const auto ht{x_diff / state().vel};
+        const auto desire_x{target_ht * state().vel};
+        const auto dist_error{x_diff - desire_x};
+        const auto vel_error{lead->state().vel - state().vel};
+        ctrl.accel = dist_error * follow_pid_dist_p + vel_error * follow_pid_vel_p;
+        if (state().vel > idm_cruise_vel_) ctrl.accel = min(0.0f, ctrl.accel);
+    }
+
+    ctrl.accel = carlet::min(ctrl.accel, max_cruise_accel);
+    ctrl.steer = 0.0f;
     return true;
 }
 
