@@ -252,7 +252,7 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #endif // CARLET_MAX_ID
 
 #ifndef CARLET_TARGET_FPS
-#   define CARLET_TARGET_FPS        60
+#   define CARLET_TARGET_FPS        50
 #endif // CARLET_TARGET_FPS
 
 #ifndef CARLET_WIN_WIDTH
