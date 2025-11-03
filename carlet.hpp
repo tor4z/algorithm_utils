@@ -1,10 +1,7 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <cstddef>
-#include <iostream>
 #include <mutex>
-#include <cmath>
 #include <vector>
 #include <raylib.h>
 
@@ -175,11 +172,13 @@ private:
     int first_controllable_idx_;
 }; // class Simulator
 
+#define CARLET_M_PI 3.14159265358979323846
+
 template<typename T>
 inline constexpr T pow2(T v) { return v * v; }
 
 template<typename T>
-inline constexpr T pow3(T v) { return v * v *v; }
+inline constexpr T pow3(T v) { return v * v * v; }
 
 template<typename T>
 inline constexpr T min(T a, T b) { return a > b ? b : a; }
@@ -200,10 +199,10 @@ template<typename T>
 inline constexpr T kmph_to_mps(T kmph) { return kmph / static_cast<T>(3.6); }
 
 template<typename T>
-inline constexpr T rad_to_deg(T rad) { return rad / M_PI * 180.0; }
+inline constexpr T rad_to_deg(T rad) { return rad / CARLET_M_PI * 180.0; }
 
 template<typename T>
-inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * M_PI; }
+inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * CARLET_M_PI; }
 
 namespace veh_model {
 
@@ -222,7 +221,7 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #endif // CARLET_HPP_
 
 
-#define CARLET_IMPLEMENTATION // delete me
+// #define CARLET_IMPLEMENTATION // delete me
 
 
 #ifdef CARLET_IMPLEMENTATION
