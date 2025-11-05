@@ -121,12 +121,30 @@ void ch_lane(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carle
     }
 }
 
+enum class Behavior
+{
+    NOMINAL = 0,
+    CH_LEFT,
+    CH_RIGHT
+}; // enum class Behavior
+
+Behavior behavior_plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+{
+    if (state.x > 100.0f) {
+        return Behavior::CH_LEFT;
+    }
+    return Behavior::NOMINAL;
+}
+
 void plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
     acc(obs, state, ctrl);
-    if (state.x > 100.0f) {
+    const auto behavior{behavior_plan(obs, state, ctrl)};
+    if (behavior == Behavior::CH_LEFT) {
         ch_lane(obs, state, ctrl, 0);
-    } else {
+    } else if (behavior == Behavior::CH_RIGHT) {
+        ch_lane(obs, state, ctrl, 0);
+    } else if (behavior == Behavior::NOMINAL) {
         lka(obs, state, ctrl);
     }
 }
@@ -136,8 +154,8 @@ int main()
     srand(time(NULL));
 
     const auto straight_road{carlet::Road::gen_straight(
-        Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
-        Vector3{.x=5000.0f, .y=0.0f, .z=0.0f},
+        Vector3{.x=0.0f, .y=20.0f, .z=0.0f},
+        Vector3{.x=5000.0f, .y=20.0f, .z=0.0f},
         4, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};

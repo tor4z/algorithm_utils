@@ -1,7 +1,13 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <iostream>
 #include <mutex>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <raylib.h>
 
@@ -103,6 +109,19 @@ struct Veh: public Object
         float accel;
     }; // struct Control
 
+    struct Obstacle
+    {
+        Vector3 center;
+        Vector3 shape;
+        float heading;
+    }; // struct Obstacle
+
+    struct SensorData
+    {
+        std::vector<Obstacle> obsts;
+        std::unordered_map<int, std::vector<Vector3>> lanelets;
+    }; // struct SensorData
+
     struct State
     {
         double x;
@@ -115,6 +134,7 @@ struct Veh: public Object
         double yaw_rate;
         double steer_angle;
 
+        double distance(const State& other) const;
         static State init_with(float init_x, float init_y, float init_vel);
     }; // struct State
 
@@ -128,13 +148,15 @@ struct Veh: public Object
         , idm_cruise_vel_(init_vel)
     {}
 
-    inline const State& state() const { return state_; }
     void act(const Control& control);
+    inline const State& state() const { return state_; }
+    inline const SensorData& sensor_data() const { return sensor_data_; }
 private:
     friend class Simulator;
     float steer_;
     float accel_;
     State state_;
+    SensorData sensor_data_;
     const VehModel vm_;
     const bool controllable_;
     const float idm_cruise_vel_;
@@ -204,6 +226,19 @@ inline constexpr T rad_to_deg(T rad) { return rad / CARLET_M_PI * 180.0; }
 template<typename T>
 inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * CARLET_M_PI; }
 
+template<typename T>
+inline constexpr T normalize_heading(T rad)
+{
+    constexpr float pi_mul_2{CARLET_M_PI * 2.0f};
+    while (rad > CARLET_M_PI) {
+        rad -= pi_mul_2;
+    }
+    while (rad < -CARLET_M_PI) {
+        rad += pi_mul_2;
+    }
+    return rad;
+}
+
 namespace veh_model {
 
 extern const VehModel tesla;
@@ -221,7 +256,7 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #endif // CARLET_HPP_
 
 
-// #define CARLET_IMPLEMENTATION // delete me
+#define CARLET_IMPLEMENTATION // delete me
 
 
 #ifdef CARLET_IMPLEMENTATION
@@ -255,8 +290,12 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #   define CARLET_TARGET_FPS        50
 #endif // CARLET_TARGET_FPS
 
+#ifndef CARLET_MAX_SENSOR_RANGE
+#   define CARLET_MAX_SENSOR_RANGE  100.0   // meter
+#endif // CARLET_MAX_SENSOR_RANGE
+
 #ifndef CARLET_WIN_WIDTH
-#   define CARLET_WIN_WIDTH         800
+#   define CARLET_WIN_WIDTH         1000
 #endif // CARLET_WIN_WIDTH
 
 #ifndef CARLET_WIN_HEIGHT
@@ -303,6 +342,12 @@ std::ostream& operator<<(std::ostream& os, const Vector3& vec)
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, float* vec)
+{
+    os << "(" << vec[0] << ", " << vec[1] << ", " << vec[2] << ")";
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state)
 {
     os << std::fixed << std::setprecision(2) << "State {"
@@ -322,6 +367,7 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state)
 
 namespace carlet {
 
+bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx);
 bool check_veh_collision(const Veh* a, const Veh* b);
 
 template<typename T>
@@ -381,14 +427,14 @@ inline void to_raylib_mesh3(float* vec)
     const auto x{vec[0]};
     const auto y{vec[1]};
     const auto z{vec[2]};
-    vec[0] = y;
+    vec[0] = -y;
     vec[1] = z;
     vec[2] = -x;
 }
 
 inline Vector3 to_raylib(const Vector3& vec)
 {
-    return Vector3{.x = -vec.y, .y = vec.x, .z = vec.z};
+    return Vector3{.x=-vec.y, .y=vec.z, .z=-vec.x};
 }
 
 inline int gen_id()
@@ -485,14 +531,14 @@ Road Road::gen_straight(const Vector3& start_position, const Vector3& end_positi
         if (!road.lanelets.empty()) {
             for (size_t j = 0; j < road.lanelets.size(); ++j) {
                 auto& lanelet{road.lanelets.at(j)};
-                const auto left_lanelet_offset{left_edge_offset_l - (j + 1) * lane_width};
-                lanelet.at(i).l.x = sample_center_point.x + left_lanelet_offset * sin_road_heading;
-                lanelet.at(i).l.y = sample_center_point.y + left_lanelet_offset * cos_road_heading;
-                lanelet.at(i).l.z = sample_center_point.z;
-                const auto right_lanelet_offset{lanelet.at(i).l.y - CARLET_LANELET_WIDTH};
-                lanelet.at(i).r.x = sample_center_point.x + right_lanelet_offset * sin_road_heading;
-                lanelet.at(i).r.y = sample_center_point.y + right_lanelet_offset * cos_road_heading;
-                lanelet.at(i).r.z = sample_center_point.z;
+                const auto left_lanelet_offset{-static_cast<int>(j + 1) * lane_width};
+                lanelet.at(i).l.x = road.left_edge.at(i).l.x + left_lanelet_offset * sin_road_heading;
+                lanelet.at(i).l.y = road.left_edge.at(i).l.y + left_lanelet_offset * cos_road_heading;
+                lanelet.at(i).l.z = road.left_edge.at(i).l.z;
+                const auto right_lanelet_offset{-CARLET_LANELET_WIDTH};
+                lanelet.at(i).r.x = lanelet.at(i).l.x + right_lanelet_offset * sin_road_heading;
+                lanelet.at(i).r.y = lanelet.at(i).l.y + right_lanelet_offset * cos_road_heading;
+                lanelet.at(i).r.z = lanelet.at(i).l.z;
             }
 
             for (int j = 0; j <= static_cast<int>(road.lanelets.size()); ++j) {
@@ -594,11 +640,11 @@ void Simulator::map_to_mesh_model()
 
         for (size_t i = 0; i < num_v_this_line - 2; i += 2) {
             map_.road_mesh.indices[t_idx * 6 + 0] = i;
-            map_.road_mesh.indices[t_idx * 6 + 1] = i + 2;
-            map_.road_mesh.indices[t_idx * 6 + 2] = i + 1;
+            map_.road_mesh.indices[t_idx * 6 + 1] = i + 1;
+            map_.road_mesh.indices[t_idx * 6 + 2] = i + 2;
             map_.road_mesh.indices[t_idx * 6 + 3] = i + 1;
-            map_.road_mesh.indices[t_idx * 6 + 4] = i + 2;
-            map_.road_mesh.indices[t_idx * 6 + 5] = i + 3;
+            map_.road_mesh.indices[t_idx * 6 + 4] = i + 3;
+            map_.road_mesh.indices[t_idx * 6 + 5] = i + 2;
             ++t_idx;
         }
 
@@ -628,11 +674,11 @@ void Simulator::map_to_mesh_model()
 
         for (size_t i = 0; i < num_v_this_line - 2; i += 2) {
             map_.edge_mesh.indices[t_idx * 6 + 0] = num_v_last_line + i;
-            map_.edge_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 2;
-            map_.edge_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 1;
+            map_.edge_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 1;
+            map_.edge_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 2;
             map_.edge_mesh.indices[t_idx * 6 + 3] = num_v_last_line + i + 1;
-            map_.edge_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 2;
-            map_.edge_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 3;
+            map_.edge_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 3;
+            map_.edge_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 2;
             ++t_idx;
         }
 
@@ -660,11 +706,11 @@ void Simulator::map_to_mesh_model()
 
         for (size_t i = 0; i < num_v_this_line - 2; i += 2) {
             map_.edge_mesh.indices[t_idx * 6 + 0] = num_v_last_line + i;
-            map_.edge_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 2;
-            map_.edge_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 1;
+            map_.edge_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 1;
+            map_.edge_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 2;
             map_.edge_mesh.indices[t_idx * 6 + 3] = num_v_last_line + i + 1;
-            map_.edge_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 2;
-            map_.edge_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 3;
+            map_.edge_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 3;
+            map_.edge_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 2;
             ++t_idx;
         }
 
@@ -694,11 +740,11 @@ void Simulator::map_to_mesh_model()
 
             for (size_t i = 0; i < num_v_this_line - 2; i += 2) {
                 map_.lanelet_mesh.indices[t_idx * 6 + 0] = num_v_last_line + i;
-                map_.lanelet_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 2;
-                map_.lanelet_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 1;
+                map_.lanelet_mesh.indices[t_idx * 6 + 1] = num_v_last_line + i + 1;
+                map_.lanelet_mesh.indices[t_idx * 6 + 2] = num_v_last_line + i + 2;
                 map_.lanelet_mesh.indices[t_idx * 6 + 3] = num_v_last_line + i + 1;
-                map_.lanelet_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 2;
-                map_.lanelet_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 3;
+                map_.lanelet_mesh.indices[t_idx * 6 + 4] = num_v_last_line + i + 3;
+                map_.lanelet_mesh.indices[t_idx * 6 + 5] = num_v_last_line + i + 2;
                 ++t_idx;
             }
         }
@@ -940,6 +986,92 @@ bool Simulator::step(float dt)
     for (auto& veh: vehs_) {
         if (veh->controllable_) {
             veh->step(dt);
+
+            // setup sensor obstacles 
+            for (const auto v: vehs_) {
+                if (v->id == veh->id) continue;
+                const auto dist{veh->state().distance(v->state())};
+                if (dist > CARLET_MAX_SENSOR_RANGE) continue;
+                const auto polar_angle{std::atan2(v->state().y - veh->state().y, v->state().x - veh->state().x)};
+                Vector3 obst_center{
+                    .x = static_cast<float>(dist * std::cos(polar_angle)),
+                    .y = static_cast<float>(dist * std::sin(polar_angle)),
+                    .z = 0.0f,
+                };
+                Veh::Obstacle obst{
+                    .center={obst_center},
+                    .shape={v->shape},
+                    .heading=normalize_heading<float>(v->state().yaw + veh->state().yaw)
+                };
+                veh->sensor_data_.obsts.push_back(obst);
+            }
+
+            // setup sensor lanelets
+            Vector3 veh_position{
+                .x=static_cast<float>(veh->state().x),
+                .y=static_cast<float>(veh->state().y),
+                .z=static_cast<float>(veh->state().z)};
+                for (const auto& road: map_.road_net) {
+                if (road.lanes.empty()) continue;
+                const auto num_lanes{road.lanes.size()};
+                int lane_idx;
+                int waypoint_idx;
+                if (find_lane_info(road.lanes, veh_position, lane_idx, waypoint_idx)) {
+                    const auto left_lanelet{lane_idx == 0
+                        ? &road.left_edge
+                        : &road.lanelets.at(lane_idx - 1)};
+                    const auto left2_lanelet{lane_idx == 0
+                        ? nullptr
+                        : lane_idx == 1
+                            ? &road.left_edge
+                            : &road.lanelets.at(lane_idx - 2)};
+                    const auto right_lanelet{lane_idx == num_lanes - 1
+                        ? &road.right_edge
+                        : &road.lanelets.at(lane_idx)};
+                    const auto right2_lanelet{lane_idx == num_lanes - 1
+                        ? nullptr
+                        : lane_idx == num_lanes - 2
+                            ? &road.right_edge
+                            : &road.lanelets.at(lane_idx + 1)};
+
+                    veh->sensor_data_.lanelets.insert(std::make_pair(-1, std::vector<Vector3>{}));
+                    veh->sensor_data_.lanelets.insert(std::make_pair(-2, std::vector<Vector3>{}));
+                    veh->sensor_data_.lanelets.insert(std::make_pair(1, std::vector<Vector3>{}));
+                    veh->sensor_data_.lanelets.insert(std::make_pair(2, std::vector<Vector3>{}));
+                    const auto max_sample_waypoints{100};
+
+                    if (left_lanelet) {
+                        const auto max_waypoint_idx{min(static_cast<int>(left_lanelet->size()),
+                            waypoint_idx + max_sample_waypoints)};
+                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
+                            veh->sensor_data_.lanelets.at(1).push_back(left_lanelet->at(i).r);
+                        }
+                    }
+                    if (left2_lanelet) {
+                        const auto max_waypoint_idx{min(static_cast<int>(left2_lanelet->size()),
+                            waypoint_idx + max_sample_waypoints)};
+                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
+                            veh->sensor_data_.lanelets.at(2).push_back(left2_lanelet->at(i).r);
+                        }
+                    }
+
+                    if (right_lanelet) {
+                        const auto max_waypoint_idx{min(static_cast<int>(right_lanelet->size()),
+                            waypoint_idx + max_sample_waypoints)};
+                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
+                            veh->sensor_data_.lanelets.at(-1).push_back(right_lanelet->at(i).l);
+                        }
+                    }
+                    if (right2_lanelet) {
+                        const auto max_waypoint_idx{min(static_cast<int>(right2_lanelet->size()),
+                            waypoint_idx + max_sample_waypoints)};
+                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
+                            veh->sensor_data_.lanelets.at(-2).push_back(right2_lanelet->at(i).l);
+                        }
+                    }
+                    break;
+                }
+            }
             continue;
         }
 
@@ -1006,37 +1138,11 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 
         for (const auto& road: obs.map.road_net) {
             if (road.lanes.empty()) continue;
-
-            for (const auto& lane: road.lanes) {
-                if (lane.empty()) continue;
-
-                size_t low{0};
-                size_t high{lane.size() - 1};
-                while (low <= high) {
-                    const auto mid{(low + high) / 2};
-                    const auto& waypoint_low{lane.at(low)};
-                    const auto& waypoint_high{lane.at(high)};
-                    if (low >= high) {
-                        const auto& min_waypoint{lane.at(mid)};
-                        const auto dist{Vector3Distance(ego_preview, min_waypoint.c)};
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            curr_waypoint = &min_waypoint;
-                        }
-                    }
-                    const auto low_dist{Vector3Distance(ego_preview, waypoint_low.c)};
-                    const auto high_dist{Vector3Distance(ego_preview, waypoint_high.c)};
-                    if (low_dist < high_dist) {
-                        high = mid - 1;
-                    } else {
-                        low = mid + 1;
-                    }
-                }
-
-                if (min_dist < lane.at(0).width / 2.0f) {
-                    // early stop
-                    break;
-                }
+            int lane_idx;
+            int waypoint_idx;
+            if (find_lane_info(road.lanes, ego_preview, lane_idx, waypoint_idx)) {
+                curr_waypoint = &road.lanes.at(lane_idx).at(waypoint_idx);
+                break;
             }
         }
 
@@ -1091,6 +1197,11 @@ void Veh::dynamic_act(float steer, float accel, float dt)
     state_.y += dy * dt;
     state_.yaw_rate = state_.vel / r;
     state_.yaw += state_.yaw_rate * dt;
+}
+
+double Veh::State::distance(const State& other) const
+{
+    return std::sqrt(pow2(x - other.x) + pow2(y - other.y) + pow2(z - other.z));
 }
 
 bool check_veh_collision(const Veh* a, const Veh* b)
@@ -1158,6 +1269,49 @@ bool check_veh_collision(const Veh* a, const Veh* b)
     }
 
     return false;
+}
+
+bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx)
+{
+    lane_idx = -1;
+    waypoint_idx = -1;
+
+    float min_dist{3.0f};
+    for (size_t i = 0; i < lanes.size(); ++i) {
+        const auto& lane{lanes.at(i)};
+        if (lane.empty()) continue;
+
+        size_t low{0};
+        size_t high{lane.size() - 1};
+        while (low <= high) {
+            const auto mid{(low + high) / 2};
+            const auto& waypoint_low{lane.at(low)};
+            const auto& waypoint_high{lane.at(high)};
+            if (low >= high) {
+                const auto& min_waypoint{lane.at(mid)};
+                const auto dist{Vector3Distance(p, min_waypoint.c)};
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    waypoint_idx = mid;
+                }
+            }
+            const auto low_dist{Vector3Distance(p, waypoint_low.c)};
+            const auto high_dist{Vector3Distance(p, waypoint_high.c)};
+            if (low_dist < high_dist) {
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        if (min_dist < lane.at(0).width / 2.0f) {
+            // early stop
+            lane_idx = i;
+            break;
+        }
+    }
+
+    return (lane_idx >= 0 && waypoint_idx >= 0) ? true : false;
 }
 
 } // namespace carlet
