@@ -130,7 +130,7 @@ enum class Behavior
 
 Behavior behavior_plan(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    if (state.x > 100.0f) {
+    if (state.x > 20.0f) {
         return Behavior::CH_LEFT;
     }
     return Behavior::NOMINAL;
@@ -154,9 +154,9 @@ int main()
     srand(time(NULL));
 
     const auto straight_road{carlet::Road::gen_straight(
-        Vector3{.x=0.0f, .y=20.0f, .z=0.0f},
-        Vector3{.x=5000.0f, .y=20.0f, .z=0.0f},
-        4, 3.7f)};
+        Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
+        Vector3{.x=5000.0f, .y=0.0f, .z=0.0f},
+        2, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);

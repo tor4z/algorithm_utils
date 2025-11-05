@@ -134,6 +134,7 @@ struct Veh: public Object
         double yaw_rate;
         double steer_angle;
 
+        double distance(const Vector3& other) const;
         double distance(const State& other) const;
         static State init_with(float init_x, float init_y, float init_vel);
     }; // struct State
@@ -187,6 +188,7 @@ private:
     void map_to_mesh_model();
     void update_camera();
     bool collision_with_any_veh(const Veh* veh);
+    void draw_mini_map();
 
     std::vector<Veh*> vehs_;
     Camera3D camera_;
@@ -367,6 +369,21 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state)
 
 namespace carlet {
 
+struct Vector2i
+{
+    int x;
+    int y;
+};
+
+struct Vector3i
+{
+    int x;
+    int y;
+    int z;
+};
+
+
+const Mesh& gen_veh_mesh();
 bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx);
 bool check_veh_collision(const Veh* a, const Veh* b);
 
@@ -866,7 +883,6 @@ void Simulator::render()
                     DrawModelWires(veh->model, zero_vec, 1.0f, WHITE);
                 }
             }
-            // DrawGrid(10, 1.0f);
         EndMode3D();
 
         // Draw in 2d space
@@ -885,20 +901,85 @@ void Simulator::render()
                 DrawText(buf, str_position_x, 10, font_size, RED);
             }
         }
+
+        // draw mini map for the first controllable vehicle
+        draw_mini_map();
     EndDrawing();
 }
 
-const Mesh& gen_veh_mesh()
+void Simulator::draw_mini_map()
 {
-    static bool mesh_uploaded{false};
-    static Mesh mesh;
+    constexpr Color map_background{.r=100, .g=100, .b=100, .a=100};
+    constexpr int mini_map_width{300};
+    constexpr auto scale{3.0f};
+    const Vector2i map_top_left{.x=(GetScreenWidth() - mini_map_width), .y=0};
+    const int mini_map_height{GetScreenHeight()};
+    const Vector2 map_center{
+        .x=static_cast<float>(map_top_left.x + mini_map_width / 2.0f),
+        .y=static_cast<float>(map_top_left.y + mini_map_height / 2.0f)
+    };
 
-    if (!mesh_uploaded) {
-        mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
-        UploadMesh(&mesh, false);
-        mesh_uploaded = true;
+    if (GetScreenWidth() < mini_map_width) {
+        return;
     }
-    return mesh;
+
+    DrawRectangle(map_top_left.x, map_top_left.y, mini_map_width, mini_map_height, map_background);
+    const auto& ego{vehs_.at(0)};
+    const Veh::SensorData& sensor_data{ego->sensor_data()};
+
+    auto to_mini_map{[&] (float x, float y, float& map_x, float& map_y) -> void {
+        map_x = map_center.x - y * scale;
+        map_y = map_center.y - x * scale;
+    }};
+
+    {
+        // draw ego
+        float ego_center_x{};
+        float ego_center_y{};
+        to_mini_map(0, 0, ego_center_x, ego_center_y);
+
+        const Rectangle ego_rec{
+            .x=ego_center_x - ego->shape.y * scale / 2,
+            .y=ego_center_y,
+            .width=ego->shape.y * scale,
+            .height=ego->shape.x * scale
+        };
+        DrawRectanglePro(ego_rec, Vector2{0, 0}, 0.0, RED);
+    }
+
+    // draw obstacle
+    for (const auto& obst: sensor_data.obsts) {
+        float obst_center_x{};
+        float obst_center_y{};
+        to_mini_map(obst.center.x, obst.center.y, obst_center_x, obst_center_y);
+
+        const Rectangle obst_rec{
+            .x=obst_center_x - static_cast<float>(obst.shape.y * scale / 2),
+            .y=obst_center_y,
+            .width=obst.shape.y * scale,
+            .height=obst.shape.x * scale
+        };
+
+        DrawRectanglePro(obst_rec, Vector2{0, 0}, 0.0, BLACK);
+    }
+
+    // draw lanelet
+    auto draw_lanelet{[&](const std::vector<Vector3>& lanelet) -> void {
+        std::vector<Vector2> points(lanelet.size());
+        for (size_t i = 0; i < lanelet.size(); ++i) {
+            const auto& p{lanelet.at(i)};
+            to_mini_map(p.x, p.y, points.at(i).x, points.at(i).y);
+        }
+        DrawLineStrip(points.data(), points.size(), BLACK);
+    }};
+
+    if (!sensor_data.lanelets.empty()) {
+        const auto& lanelets{sensor_data.lanelets};
+        if (lanelets.find(-1) != lanelets.end()) draw_lanelet(lanelets.find(-1)->second);
+        if (lanelets.find(-2) != lanelets.end()) draw_lanelet(lanelets.find(-2)->second);
+        if (lanelets.find(1) != lanelets.end()) draw_lanelet(lanelets.find(1)->second);
+        if (lanelets.find(2) != lanelets.end()) draw_lanelet(lanelets.find(2)->second);
+    }
 }
 
 int Simulator::create_ctrl_veh(const VehModel& model, int lane_idx)
@@ -988,15 +1069,16 @@ bool Simulator::step(float dt)
             veh->step(dt);
 
             // setup sensor obstacles 
+            veh->sensor_data_.obsts.clear();
             for (const auto v: vehs_) {
                 if (v->id == veh->id) continue;
                 const auto dist{veh->state().distance(v->state())};
                 if (dist > CARLET_MAX_SENSOR_RANGE) continue;
                 const auto polar_angle{std::atan2(v->state().y - veh->state().y, v->state().x - veh->state().x)};
                 Vector3 obst_center{
-                    .x = static_cast<float>(dist * std::cos(polar_angle)),
-                    .y = static_cast<float>(dist * std::sin(polar_angle)),
-                    .z = 0.0f,
+                    .x=static_cast<float>(dist * std::cos(polar_angle)),
+                    .y=static_cast<float>(dist * std::sin(polar_angle)),
+                    .z=0.0f,
                 };
                 Veh::Obstacle obst{
                     .center={obst_center},
@@ -1010,9 +1092,36 @@ bool Simulator::step(float dt)
             Vector3 veh_position{
                 .x=static_cast<float>(veh->state().x),
                 .y=static_cast<float>(veh->state().y),
-                .z=static_cast<float>(veh->state().z)};
-                for (const auto& road: map_.road_net) {
+                .z=static_cast<float>(veh->state().z)
+            };
+
+            auto& lanelets{veh->sensor_data_.lanelets};
+            auto reset_lanelet{[&lanelets](int key) -> void {
+                if (lanelets.find(key) == lanelets.end()) {
+                    lanelets.insert(std::make_pair(key, std::vector<Vector3>{}));
+                } else {
+                    lanelets.at(key).clear();
+                }
+            }};
+
+            reset_lanelet(-1);
+            reset_lanelet(-2);
+            reset_lanelet(1);
+            reset_lanelet(2);
+
+            auto to_baselink{[veh](const Vector3& w) -> Vector3 {
+                Vector3 baselink;
+                const auto alpha{std::atan2(w.y - veh->state().y, w.x - veh->state().x)};
+                const auto dist{veh->state().distance(w)};
+                baselink.x = dist * std::cos(alpha);
+                baselink.y = dist * std::sin(alpha);
+                baselink.z = w.z;
+                return baselink;
+            }};
+
+            for (const auto& road: map_.road_net) {
                 if (road.lanes.empty()) continue;
+
                 const auto num_lanes{road.lanes.size()};
                 int lane_idx;
                 int waypoint_idx;
@@ -1033,25 +1142,20 @@ bool Simulator::step(float dt)
                         : lane_idx == num_lanes - 2
                             ? &road.right_edge
                             : &road.lanelets.at(lane_idx + 1)};
-
-                    veh->sensor_data_.lanelets.insert(std::make_pair(-1, std::vector<Vector3>{}));
-                    veh->sensor_data_.lanelets.insert(std::make_pair(-2, std::vector<Vector3>{}));
-                    veh->sensor_data_.lanelets.insert(std::make_pair(1, std::vector<Vector3>{}));
-                    veh->sensor_data_.lanelets.insert(std::make_pair(2, std::vector<Vector3>{}));
                     const auto max_sample_waypoints{100};
 
                     if (left_lanelet) {
                         const auto max_waypoint_idx{min(static_cast<int>(left_lanelet->size()),
                             waypoint_idx + max_sample_waypoints)};
                         for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            veh->sensor_data_.lanelets.at(1).push_back(left_lanelet->at(i).r);
+                            lanelets.at(1).push_back(to_baselink(left_lanelet->at(i).r));
                         }
                     }
                     if (left2_lanelet) {
                         const auto max_waypoint_idx{min(static_cast<int>(left2_lanelet->size()),
                             waypoint_idx + max_sample_waypoints)};
                         for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            veh->sensor_data_.lanelets.at(2).push_back(left2_lanelet->at(i).r);
+                            lanelets.at(2).push_back(to_baselink(left2_lanelet->at(i).r));
                         }
                     }
 
@@ -1059,14 +1163,14 @@ bool Simulator::step(float dt)
                         const auto max_waypoint_idx{min(static_cast<int>(right_lanelet->size()),
                             waypoint_idx + max_sample_waypoints)};
                         for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            veh->sensor_data_.lanelets.at(-1).push_back(right_lanelet->at(i).l);
+                            lanelets.at(-1).push_back(to_baselink(right_lanelet->at(i).l));
                         }
                     }
                     if (right2_lanelet) {
                         const auto max_waypoint_idx{min(static_cast<int>(right2_lanelet->size()),
                             waypoint_idx + max_sample_waypoints)};
                         for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            veh->sensor_data_.lanelets.at(-2).push_back(right2_lanelet->at(i).l);
+                            lanelets.at(-2).push_back(to_baselink(right2_lanelet->at(i).l));
                         }
                     }
                     break;
@@ -1199,6 +1303,11 @@ void Veh::dynamic_act(float steer, float accel, float dt)
     state_.yaw += state_.yaw_rate * dt;
 }
 
+double Veh::State::distance(const Vector3& other) const
+{
+    return std::sqrt(pow2(x - other.x) + pow2(y - other.y) + pow2(z - other.z));
+}
+
 double Veh::State::distance(const State& other) const
 {
     return std::sqrt(pow2(x - other.x) + pow2(y - other.y) + pow2(z - other.z));
@@ -1269,6 +1378,19 @@ bool check_veh_collision(const Veh* a, const Veh* b)
     }
 
     return false;
+}
+
+const Mesh& gen_veh_mesh()
+{
+    static bool mesh_uploaded{false};
+    static Mesh mesh;
+
+    if (!mesh_uploaded) {
+        mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
+        UploadMesh(&mesh, false);
+        mesh_uploaded = true;
+    }
+    return mesh;
 }
 
 bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx)
