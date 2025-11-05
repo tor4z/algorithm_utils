@@ -189,6 +189,9 @@ private:
     void update_camera();
     bool collision_with_any_veh(const Veh* veh);
     void draw_mini_map();
+    void sensing(Veh* ego, float dt);
+    void sensing_obsts(Veh* ego);
+    void sensing_lanelets(Veh* ego);
 
     std::vector<Veh*> vehs_;
     Camera3D camera_;
@@ -910,13 +913,13 @@ void Simulator::render()
 void Simulator::draw_mini_map()
 {
     constexpr Color map_background{.r=100, .g=100, .b=100, .a=100};
-    constexpr int mini_map_width{300};
-    constexpr auto scale{3.0f};
+    constexpr int mini_map_width{200};
+    constexpr auto scale{5.0f};
     const Vector2i map_top_left{.x=(GetScreenWidth() - mini_map_width), .y=0};
     const int mini_map_height{GetScreenHeight()};
     const Vector2 map_center{
-        .x=static_cast<float>(map_top_left.x + mini_map_width / 2.0f),
-        .y=static_cast<float>(map_top_left.y + mini_map_height / 2.0f)
+        .x=static_cast<float>(map_top_left.x + mini_map_width * 0.5f),
+        .y=static_cast<float>(map_top_left.y + mini_map_height * 0.9f)
     };
 
     if (GetScreenWidth() < mini_map_width) {
@@ -1060,6 +1063,138 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
     }
 }
 
+void Simulator::sensing_obsts(Veh* ego)
+{
+    // setup sensor obstacles 
+    ego->sensor_data_.obsts.clear();
+    for (const auto v: vehs_) {
+        if (v->id == ego->id) continue;
+        const auto dist{ego->state().distance(v->state())};
+        if (dist > CARLET_MAX_SENSOR_RANGE) continue;
+        const auto polar_angle{std::atan2(v->state().y - ego->state().y, v->state().x - ego->state().x)};
+        Vector3 obst_center{
+            .x=static_cast<float>(dist * std::cos(polar_angle)),
+            .y=static_cast<float>(dist * std::sin(polar_angle)),
+            .z=0.0f,
+        };
+        Veh::Obstacle obst{
+            .center={obst_center},
+            .shape={v->shape},
+            .heading=normalize_heading<float>(v->state().yaw + ego->state().yaw)
+        };
+        ego->sensor_data_.obsts.push_back(obst);
+    }
+}
+
+
+void Simulator::sensing_lanelets(Veh* ego)
+{
+    // setup sensor lanelets
+    Vector3 veh_position{
+        .x=static_cast<float>(ego->state().x),
+        .y=static_cast<float>(ego->state().y),
+        .z=static_cast<float>(ego->state().z)
+    };
+
+    auto& lanelets{ego->sensor_data_.lanelets};
+    auto reset_lanelet{[&lanelets](int key) -> void {
+        if (lanelets.find(key) == lanelets.end()) {
+            lanelets.insert(std::make_pair(key, std::vector<Vector3>{}));
+        } else {
+            lanelets.at(key).clear();
+        }
+    }};
+
+    reset_lanelet(-1);
+    reset_lanelet(-2);
+    reset_lanelet(1);
+    reset_lanelet(2);
+
+    auto to_baselink{[ego](const Vector3& w) -> Vector3 {
+        Vector3 baselink;
+        const auto alpha{std::atan2(w.y - ego->state().y, w.x - ego->state().x)};
+        const auto dist{ego->state().distance(w)};
+        baselink.x = dist * std::cos(alpha);
+        baselink.y = dist * std::sin(alpha);
+        baselink.z = w.z;
+        return baselink;
+    }};
+
+    constexpr auto max_sample_waypoints{100};
+    constexpr auto start_sample_waypoints{10};
+    for (const auto& road: map_.road_net) {
+        if (road.lanes.empty()) continue;
+
+        const auto num_lanes{road.lanes.size()};
+        int lane_idx;
+        int waypoint_idx;
+        if (find_lane_info(road.lanes, veh_position, lane_idx, waypoint_idx)) {
+            const auto left_lanelet{lane_idx == 0
+                ? &road.left_edge
+                : &road.lanelets.at(lane_idx - 1)};
+            const auto left2_lanelet{lane_idx == 0
+                ? nullptr
+                : lane_idx == 1
+                    ? &road.left_edge
+                    : &road.lanelets.at(lane_idx - 2)};
+            const auto right_lanelet{lane_idx == num_lanes - 1
+                ? &road.right_edge
+                : &road.lanelets.at(lane_idx)};
+            const auto right2_lanelet{lane_idx == num_lanes - 1
+                ? nullptr
+                : lane_idx == num_lanes - 2
+                    ? &road.right_edge
+                    : &road.lanelets.at(lane_idx + 1)};
+
+            const auto min_waypoint_idx{max(0, waypoint_idx - start_sample_waypoints)};
+            if (left_lanelet) {
+                const auto max_waypoint_idx{min(static_cast<int>(left_lanelet->size()),
+                    waypoint_idx + max_sample_waypoints)};
+                for (int i = min_waypoint_idx; i < max_waypoint_idx; ++i) {
+                    lanelets.at(1).push_back(to_baselink(left_lanelet->at(i).r));
+                }
+            }
+            if (left2_lanelet) {
+                const auto max_waypoint_idx{min(static_cast<int>(left2_lanelet->size()),
+                    waypoint_idx + max_sample_waypoints)};
+                for (int i = min_waypoint_idx; i < max_waypoint_idx; ++i) {
+                    lanelets.at(2).push_back(to_baselink(left2_lanelet->at(i).r));
+                }
+            }
+
+            if (right_lanelet) {
+                const auto max_waypoint_idx{min(static_cast<int>(right_lanelet->size()),
+                    waypoint_idx + max_sample_waypoints)};
+                for (int i = min_waypoint_idx; i < max_waypoint_idx; ++i) {
+                    lanelets.at(-1).push_back(to_baselink(right_lanelet->at(i).l));
+                }
+            }
+            if (right2_lanelet) {
+                const auto max_waypoint_idx{min(static_cast<int>(right2_lanelet->size()),
+                    waypoint_idx + max_sample_waypoints)};
+                for (int i = min_waypoint_idx; i < max_waypoint_idx; ++i) {
+                    lanelets.at(-2).push_back(to_baselink(right2_lanelet->at(i).l));
+                }
+            }
+            break;
+        }
+    }
+}
+
+void Simulator::sensing(Veh* ego, float dt)
+{
+    constexpr float sensing_period{0.05f};  // sec.
+    static float last_sensing_time{0.0f};
+    static float next_sensing_time{0.0f};
+
+    last_sensing_time += dt;
+    if (last_sensing_time > next_sensing_time) {
+        next_sensing_time = last_sensing_time + sensing_period;
+        sensing_obsts(ego);
+        sensing_lanelets(ego);
+    }
+}
+
 bool Simulator::step(float dt)
 {
     Veh::Control idm_control;
@@ -1067,115 +1202,7 @@ bool Simulator::step(float dt)
     for (auto& veh: vehs_) {
         if (veh->controllable_) {
             veh->step(dt);
-
-            // setup sensor obstacles 
-            veh->sensor_data_.obsts.clear();
-            for (const auto v: vehs_) {
-                if (v->id == veh->id) continue;
-                const auto dist{veh->state().distance(v->state())};
-                if (dist > CARLET_MAX_SENSOR_RANGE) continue;
-                const auto polar_angle{std::atan2(v->state().y - veh->state().y, v->state().x - veh->state().x)};
-                Vector3 obst_center{
-                    .x=static_cast<float>(dist * std::cos(polar_angle)),
-                    .y=static_cast<float>(dist * std::sin(polar_angle)),
-                    .z=0.0f,
-                };
-                Veh::Obstacle obst{
-                    .center={obst_center},
-                    .shape={v->shape},
-                    .heading=normalize_heading<float>(v->state().yaw + veh->state().yaw)
-                };
-                veh->sensor_data_.obsts.push_back(obst);
-            }
-
-            // setup sensor lanelets
-            Vector3 veh_position{
-                .x=static_cast<float>(veh->state().x),
-                .y=static_cast<float>(veh->state().y),
-                .z=static_cast<float>(veh->state().z)
-            };
-
-            auto& lanelets{veh->sensor_data_.lanelets};
-            auto reset_lanelet{[&lanelets](int key) -> void {
-                if (lanelets.find(key) == lanelets.end()) {
-                    lanelets.insert(std::make_pair(key, std::vector<Vector3>{}));
-                } else {
-                    lanelets.at(key).clear();
-                }
-            }};
-
-            reset_lanelet(-1);
-            reset_lanelet(-2);
-            reset_lanelet(1);
-            reset_lanelet(2);
-
-            auto to_baselink{[veh](const Vector3& w) -> Vector3 {
-                Vector3 baselink;
-                const auto alpha{std::atan2(w.y - veh->state().y, w.x - veh->state().x)};
-                const auto dist{veh->state().distance(w)};
-                baselink.x = dist * std::cos(alpha);
-                baselink.y = dist * std::sin(alpha);
-                baselink.z = w.z;
-                return baselink;
-            }};
-
-            for (const auto& road: map_.road_net) {
-                if (road.lanes.empty()) continue;
-
-                const auto num_lanes{road.lanes.size()};
-                int lane_idx;
-                int waypoint_idx;
-                if (find_lane_info(road.lanes, veh_position, lane_idx, waypoint_idx)) {
-                    const auto left_lanelet{lane_idx == 0
-                        ? &road.left_edge
-                        : &road.lanelets.at(lane_idx - 1)};
-                    const auto left2_lanelet{lane_idx == 0
-                        ? nullptr
-                        : lane_idx == 1
-                            ? &road.left_edge
-                            : &road.lanelets.at(lane_idx - 2)};
-                    const auto right_lanelet{lane_idx == num_lanes - 1
-                        ? &road.right_edge
-                        : &road.lanelets.at(lane_idx)};
-                    const auto right2_lanelet{lane_idx == num_lanes - 1
-                        ? nullptr
-                        : lane_idx == num_lanes - 2
-                            ? &road.right_edge
-                            : &road.lanelets.at(lane_idx + 1)};
-                    const auto max_sample_waypoints{100};
-
-                    if (left_lanelet) {
-                        const auto max_waypoint_idx{min(static_cast<int>(left_lanelet->size()),
-                            waypoint_idx + max_sample_waypoints)};
-                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            lanelets.at(1).push_back(to_baselink(left_lanelet->at(i).r));
-                        }
-                    }
-                    if (left2_lanelet) {
-                        const auto max_waypoint_idx{min(static_cast<int>(left2_lanelet->size()),
-                            waypoint_idx + max_sample_waypoints)};
-                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            lanelets.at(2).push_back(to_baselink(left2_lanelet->at(i).r));
-                        }
-                    }
-
-                    if (right_lanelet) {
-                        const auto max_waypoint_idx{min(static_cast<int>(right_lanelet->size()),
-                            waypoint_idx + max_sample_waypoints)};
-                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            lanelets.at(-1).push_back(to_baselink(right_lanelet->at(i).l));
-                        }
-                    }
-                    if (right2_lanelet) {
-                        const auto max_waypoint_idx{min(static_cast<int>(right2_lanelet->size()),
-                            waypoint_idx + max_sample_waypoints)};
-                        for (int i = waypoint_idx; i < max_waypoint_idx; ++i) {
-                            lanelets.at(-2).push_back(to_baselink(right2_lanelet->at(i).l));
-                        }
-                    }
-                    break;
-                }
-            }
+            sensing(veh, dt);
             continue;
         }
 
@@ -1403,8 +1430,8 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
         const auto& lane{lanes.at(i)};
         if (lane.empty()) continue;
 
-        size_t low{0};
-        size_t high{lane.size() - 1};
+        int low{0};
+        int high{static_cast<int>(lane.size()) - 1};
         while (low <= high) {
             const auto mid{(low + high) / 2};
             const auto& waypoint_low{lane.at(low)};
@@ -1420,9 +1447,9 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
             const auto low_dist{Vector3Distance(p, waypoint_low.c)};
             const auto high_dist{Vector3Distance(p, waypoint_high.c)};
             if (low_dist < high_dist) {
-                high = mid - 1;
+                high = max(mid - 1, 0);
             } else {
-                low = mid + 1;
+                low = min(mid + 1, static_cast<int>(lane.size()) - 1);
             }
         }
 

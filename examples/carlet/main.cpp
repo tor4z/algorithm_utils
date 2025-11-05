@@ -34,7 +34,7 @@ int get_lane_idx(const carlet::Veh::Obs& obs, const carlet::Veh::State& state)
 
 void lka(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    const carlet::Road::LaneSample* curr_waypoint{nullptr};
+    int curr_waypoint_idx{-1};
     float min_dist{5.0f};
     const auto preview_length{20.0f};
     const auto target_lane_idx{get_lane_idx(obs, state)};
@@ -46,18 +46,21 @@ void lka(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::V
 
     if (target_lane_idx >= 0) {
         const auto lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
-        for (const auto& waypoint : lane) {
+        for (size_t i = 0; i < lane.size(); ++i) {
+            const auto& waypoint{lane.at(i)};
             const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
             if (this_dist < min_dist) {
                 min_dist = this_dist;
-                curr_waypoint = &waypoint;
+                curr_waypoint_idx = i;
             }
         }
     }
 
     ctrl.steer = 0.0f;
-    if (curr_waypoint) {
-        const auto error{ego_preview.y - curr_waypoint->c.y};
+    if (curr_waypoint_idx >= 0) {
+        const auto lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
+        const auto& curr_waypoint{lane.at(curr_waypoint_idx)};
+        const auto error{ego_preview.y - curr_waypoint.c.y};
         ctrl.steer = -error * 0.01;
     }
 }
