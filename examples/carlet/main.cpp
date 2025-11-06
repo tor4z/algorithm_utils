@@ -7,7 +7,7 @@
 
 constexpr double target_spd{carlet::kmph_to_mps(120.0)};
 
-int get_lane_idx(const carlet::Veh::Obs& obs, const carlet::Veh::State& state)
+bool get_lane_idx(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, int& lane_idx, int& waypoint_idx)
 {
     int target_idx{-1};
     float min_dist{2.0f};
@@ -17,49 +17,32 @@ int get_lane_idx(const carlet::Veh::Obs& obs, const carlet::Veh::State& state)
         .z=static_cast<float>(state.z)
     };
     for (const auto& road: obs.map.road_net) {
-        for (size_t i = 0; i < road.lanes.size(); ++i) {
-            const auto& lane{road.lanes.at(i)};
-            for (const auto& waypoint : lane) {
-                const auto this_dist{Vector3Distance(ego_pose, waypoint.c)};
-                if (this_dist < min_dist) {
-                    min_dist = this_dist;
-                    target_idx = i;
-                }
-            }
+        if (carlet::find_lane_info(road.lanes, ego_pose, lane_idx, waypoint_idx)) {
+            return true;
         }
     }
-
-    return target_idx;
+    return false;
 }
 
 void lka(const carlet::Veh::Obs& obs, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    int curr_waypoint_idx{-1};
-    float min_dist{5.0f};
     const auto preview_length{20.0f};
-    const auto target_lane_idx{get_lane_idx(obs, state)};
     const Vector3 ego_preview{
         .x=static_cast<float>(state.x + preview_length * std::cos(state.yaw)),
         .y=static_cast<float>(state.y + preview_length * std::sin(state.yaw)),
         .z=static_cast<float>(state.z)
     };
 
-    if (target_lane_idx >= 0) {
-        const auto lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
-        for (size_t i = 0; i < lane.size(); ++i) {
-            const auto& waypoint{lane.at(i)};
-            const auto this_dist{Vector3Distance(ego_preview, waypoint.c)};
-            if (this_dist < min_dist) {
-                min_dist = this_dist;
-                curr_waypoint_idx = i;
-            }
-        }
+    int lane_idx;
+    int waypoint_idx;
+    if (!get_lane_idx(obs, state, lane_idx, waypoint_idx)) {
+        return;
     }
 
     ctrl.steer = 0.0f;
-    if (curr_waypoint_idx >= 0) {
-        const auto lane{obs.map.road_net.at(0).lanes.at(target_lane_idx)};
-        const auto& curr_waypoint{lane.at(curr_waypoint_idx)};
+    if (waypoint_idx >= 0) {
+        const auto lane{obs.map.road_net.at(0).lanes.at(lane_idx)};
+        const auto& curr_waypoint{lane.at(waypoint_idx)};
         const auto error{ego_preview.y - curr_waypoint.c.y};
         ctrl.steer = -error * 0.01;
     }

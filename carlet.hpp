@@ -1443,6 +1443,7 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
                     min_dist = dist;
                     waypoint_idx = mid;
                 }
+                break;
             }
             const auto low_dist{Vector3Distance(p, waypoint_low.c)};
             const auto high_dist{Vector3Distance(p, waypoint_high.c)};
