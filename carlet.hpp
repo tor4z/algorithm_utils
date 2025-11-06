@@ -1,14 +1,10 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <cmath>
-#include <cstddef>
-#include <cstdio>
 #include <iostream>
 #include <mutex>
-#include <unordered_map>
-#include <utility>
 #include <vector>
+#include <unordered_map>
 #include <raylib.h>
 
 #define CARLET_DEF_SINGLETON(classname)                           \
@@ -114,6 +110,7 @@ struct Veh: public Object
         Vector3 center;
         Vector3 shape;
         float heading;
+        float vel;
     }; // struct Obstacle
 
     struct SensorData
@@ -331,9 +328,9 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #   define CARLET_DEF_VEH_HEIGHT    1.6f    // meter
 #endif // CARLET_DEF_VEH_HEIGHT
 
-#ifndef CARLET_GEN_VEH_MAX_NUM_TRIES
-#   define CARLET_GEN_VEH_MAX_NUM_TRIES 10
-#endif // CARLET_GEN_VEH_MAX_NUM_TRIES
+#ifndef CARLET_MAX_GEN_VEH_TRIES
+#   define CARLET_MAX_GEN_VEH_TRIES 10
+#endif // CARLET_MAX_GEN_VEH_TRIES
 
 #define CARLET_ARR_LEN(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
@@ -388,7 +385,6 @@ struct Vector3i
     int y;
     int z;
 };
-
 
 const Mesh& gen_veh_mesh();
 bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx);
@@ -1041,6 +1037,8 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
     const auto num_roads{roads.size()};
     const auto num_veh_each_road{n / num_roads};
 
+    if (n <= 0) return;
+
     for (const auto& road: roads) {
         const auto num_lane{road.lanes.size()};
         int n_tries{0};
@@ -1059,7 +1057,7 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
             // collision check
             ++n_tries;
             if (collision_with_any_veh(&veh)) {
-                if (n_tries > CARLET_GEN_VEH_MAX_NUM_TRIES) {
+                if (n_tries > CARLET_MAX_GEN_VEH_TRIES) {
                     TraceLog(LOG_WARNING, "Too many vehicles to generate in such a small map, "
                         "generating random vehicles stopped.");
                     break;
@@ -1094,7 +1092,8 @@ void Simulator::sensing_obsts(Veh* ego)
         Veh::Obstacle obst{
             .center={obst_center},
             .shape={v->shape},
-            .heading=normalize_heading<float>(v->state().yaw + ego->state().yaw)
+            .heading=normalize_heading<float>(v->state().yaw + ego->state().yaw),
+            .vel=static_cast<float>(v->state().vel),
         };
         ego->sensor_data_.obsts.push_back(obst);
     }
@@ -1231,6 +1230,8 @@ bool Simulator::step(float dt)
 
 bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 {
+    if (controllable_) return false;
+
     ctrl.steer = 0.0f;
     ctrl.accel = 0.0f;
 
@@ -1468,7 +1469,7 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
             }
         }
 
-        if (min_dist < lane.at(0).width / 2.0f) {
+        if (min_dist < (lane.at(0).width / 2.0f + CARLET_DEF_VEH_WIDTH / 2.0f)) {
             // early stop
             lane_idx = i;
             break;
