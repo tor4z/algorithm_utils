@@ -331,6 +331,10 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #   define CARLET_DEF_VEH_HEIGHT    1.6f    // meter
 #endif // CARLET_DEF_VEH_HEIGHT
 
+#ifndef CARLET_GEN_VEH_MAX_NUM_TRIES
+#   define CARLET_GEN_VEH_MAX_NUM_TRIES 10
+#endif // CARLET_GEN_VEH_MAX_NUM_TRIES
+
 #define CARLET_ARR_LEN(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
 
@@ -394,7 +398,7 @@ template<typename T>
 inline T rand_ab(T a, T b)
 {
     assert(b > a);
-    const auto rv01{static_cast<float>(rand()) / static_cast<float>(RAND_MAX)};
+    const auto rv01{static_cast<float>(rand()) / (static_cast<float>(RAND_MAX) + 1.0f)};
     return rv01 * (b - a) + a;
 }
 
@@ -1039,6 +1043,7 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
 
     for (const auto& road: roads) {
         const auto num_lane{road.lanes.size()};
+        int n_tries{0};
         for (int i = 0; i < num_veh_each_road;) {
             const auto lane_idx{rand_ab(0ul, num_lane)};
             const auto& target_lane{road.lanes.at(lane_idx)};
@@ -1052,13 +1057,22 @@ void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
             veh.shape.z = CARLET_DEF_VEH_HEIGHT;
 
             // collision check
-            if (collision_with_any_veh(&veh)) continue;
+            ++n_tries;
+            if (collision_with_any_veh(&veh)) {
+                if (n_tries > CARLET_GEN_VEH_MAX_NUM_TRIES) {
+                    TraceLog(LOG_WARNING, "Too many vehicles to generate in such a small map, "
+                        "generating random vehicles stopped.");
+                    break;
+                }
+                continue;
+            }
 
             // properties for rendering
             veh.color = next_color();
             veh.model = LoadModelFromMesh(gen_veh_mesh());
             vehs_.push_back(new Veh(veh));
             ++i;
+            n_tries = 0;
         }
     }
 }
