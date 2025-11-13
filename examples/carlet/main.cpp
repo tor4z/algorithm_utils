@@ -10,7 +10,7 @@
 #include "carlet.hpp"
 
 
-constexpr double target_spd{carlet::kmph_to_mps(120.0)};
+constexpr double target_spd{carlet::kmph_to_mps(150.0)};
 
 template<typename T>
 inline constexpr T avg2(const T& a, const T& b) { return (a + b) / 2; }
@@ -78,25 +78,26 @@ void lka(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& s
 
 void acc(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    const carlet::Veh::Obstacle* lead{nullptr};
-    for (const auto obst: sensor_data.obsts) {
+    int lead_idx{-1};
+    for (size_t i = 0; i < sensor_data.obsts.size(); ++i) {
+        const auto& obst{sensor_data.obsts.at(i)};
         if (obst.center.x < 0) continue;
-        if (obst.center.x > 60.0f) continue;
         if (carlet::abs(obst.center.y - state.y) > 2.0f) continue;
-        if (lead && obst.center.x > lead->center.x) continue;
-        lead = &obst;
+        if (lead_idx >= 0 && obst.center.x > sensor_data.obsts.at(lead_idx).center.x) continue;
+        lead_idx = i;
     }
 
     const auto cruise_error{target_spd - state.vel};
-    if (!lead) {
+    if (lead_idx < 0) {
         ctrl.accel = cruise_error * 0.1f;
     } else {
+        const auto& lead{sensor_data.obsts.at(lead_idx)};
         const auto target_ht{2.5};
-        const auto x_diff{lead->center.x - state.x};
+        const auto x_diff{lead.center.x - 0};
         const auto ht{x_diff / state.vel};
         const auto desire_x{target_ht * state.vel};
         const auto dist_error{x_diff - desire_x};
-        const auto vel_error{lead->vel - state.vel};
+        const auto vel_error{lead.vel - state.vel};
         ctrl.accel = dist_error * 0.2 + vel_error * 0.4;
     }
 
@@ -198,13 +199,13 @@ int main()
 
     const auto straight_road{carlet::Road::gen_straight(
         Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
-        Vector3{.x=500.0f, .y=0.0f, .z=0.0f},
+        Vector3{.x=2000.0f, .y=0.0f, .z=0.0f},
         2, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
     sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
-    sim->gen_random_vehs(40,
+    sim->gen_random_vehs(80,
         carlet::kmph_to_mps(40.0),
         carlet::kmph_to_mps(120.0));
 
