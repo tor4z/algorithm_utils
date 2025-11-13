@@ -4,6 +4,8 @@
 #include <iostream>
 #include <raylib.h>
 #include <raymath.h>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #define CARLET_IMPLEMENTATION
@@ -32,6 +34,134 @@ inline constexpr Vector2 avg2<Vector2>(const Vector2& a, const Vector2& b)
         .x=(a.x + b.x) / 2,
         .y=(a.y + b.y) / 2,
     };
+}
+
+struct ObstacleInfo
+{
+    Vector3 center;
+    Vector3 shape;
+    float heading;
+    float vel;
+    int lane_id;
+    int lane_sample_idx;
+}; // struct ObstacleInfo
+
+struct LaneInfo
+{
+    explicit LaneInfo(int id) : id(id) {}
+
+    struct Sample {
+        Vector3 left;
+        Vector3 center;
+        Vector3 right;
+    }; // struct Sample
+
+    std::vector<Sample> samples;
+    std::vector<int> obsts;
+    int id;
+}; // struct LaneInfo
+
+struct Scene
+{
+    explicit Scene(const carlet::Veh::SensorData& sensor_data);
+
+    std::unordered_map<int, LaneInfo> lanes;
+    std::vector<ObstacleInfo> obsts;
+private:
+    int project_obst_lane(const carlet::Veh::Obstacle& obst, const LaneInfo& lane);
+}; // struct Scene
+
+Scene::Scene(const carlet::Veh::SensorData& sensor_data)
+{
+    obsts.reserve(sensor_data.obsts.size());
+
+    lanes.insert(std::make_pair(-1, LaneInfo{-1}));
+    lanes.insert(std::make_pair(0, LaneInfo{0}));
+    lanes.insert(std::make_pair(1, LaneInfo{1}));
+
+    for (size_t i = 0; i < sensor_data.obsts.size(); ++i) {
+        const auto& obst{sensor_data.obsts.at(i)};
+        ObstacleInfo obst_info;
+        bool obst_valid{true};
+        int lane_id{};
+
+        for (const auto& it: lanes) {
+            if (it.first < -2 || it.first > 2) continue;
+            if (!obst_valid) break;
+            const auto project_idx{project_obst_lane(obst, it.second)};
+            if (project_idx < 0) continue;
+
+            const auto& project_point{it.second.samples.at(project_idx)};
+            const auto on_left{obst.center.y > project_point.y};
+            const auto on_right{!on_left};
+            switch (it.first) {
+            case -2:
+                {
+                    if (on_right) {
+                        obst_valid = false;
+                    }
+                } break;
+            case 2:
+                {
+                    if (on_left) {
+                        obst_valid = false;
+                    }
+                } break;
+            case -1:
+                lane_id = on_right ? -1 : 0;
+                break;
+            case 1:
+                lane_id = on_left ? 1 : 0;
+                break;
+            default:
+                break;
+            }
+        }
+
+        if (!obst_valid) continue;
+        obst_info.center = obst.center;
+        obst_info.shape = obst.shape;
+        obst_info.heading = obst.heading;
+        obst_info.vel = obst.vel;
+        obst_info.lane_id = lane_id;
+        obsts.push_back(obst_info);
+    }
+}
+
+int Scene::project_obst_lane(const carlet::Veh::Obstacle& obst, const LaneInfo& lane)
+{
+    if (lane.samples.empty()) return -1;
+
+    int low{0};
+    int high{static_cast<int>(lane.samples.size()) - 1};
+    float dist_low{Vector3DistanceSqr(obst.center, lane.samples.at(low).center)};
+    float dist_high{Vector3DistanceSqr(obst.center, lane.samples.at(high).center)};
+
+    while (low < high) {
+        const auto mid{(low + high) / 2};
+        if (dist_low < dist_high) {
+            high = mid - 1;
+            dist_high = Vector3DistanceSqr(obst.center, lane.samples.at(high).center);
+        } else {
+            low = mid + 1;
+            dist_low = Vector3DistanceSqr(obst.center, lane.samples.at(low).center);
+        }
+    }
+
+    return (low + high) / 2;
+}
+
+int find_lead_idx(const std::vector<ObstacleInfo>& obsts)
+{
+    int lead_idx{-1};
+    for (size_t i = 0; i < obsts.size(); ++i) {
+        const auto& obst{obsts.at(i)};
+        if (obst.center.x < 0) continue;
+        if (obst.lane_id != 0) continue;
+        if (lead_idx >= 0 && obst.center.x > obsts.at(lead_idx).center.x) continue;
+        lead_idx = i;
+    }
+    return lead_idx;
 }
 
 void lka(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
@@ -76,22 +206,15 @@ void lka(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& s
     }
 }
 
-void acc(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+void acc(const std::vector<ObstacleInfo>& obsts, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    int lead_idx{-1};
-    for (size_t i = 0; i < sensor_data.obsts.size(); ++i) {
-        const auto& obst{sensor_data.obsts.at(i)};
-        if (obst.center.x < 0) continue;
-        if (carlet::abs(obst.center.y - state.y) > 2.0f) continue;
-        if (lead_idx >= 0 && obst.center.x > sensor_data.obsts.at(lead_idx).center.x) continue;
-        lead_idx = i;
-    }
-
+    const auto lead_idx{find_lead_idx(obsts)};
     const auto cruise_error{target_spd - state.vel};
+
     if (lead_idx < 0) {
         ctrl.accel = cruise_error * 0.1f;
     } else {
-        const auto& lead{sensor_data.obsts.at(lead_idx)};
+        const auto& lead{obsts.at(lead_idx)};
         const auto target_ht{2.5};
         const auto x_diff{lead.center.x - 0};
         const auto ht{x_diff / state.vel};
@@ -120,7 +243,6 @@ void ch_lane(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::Stat
             std::cerr << "No available right lane\n";
             return;
         }
-
         right_lanelet = &sensor_data.lanelets.at(-2);
         left_lanelet = &sensor_data.lanelets.at(-1);
     } else if (ch_lane_id == 1) {
@@ -172,18 +294,34 @@ enum class Behavior
     CH_RIGHT
 }; // enum class Behavior
 
-Behavior behavior_plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
+Behavior behavior_plan(const std::vector<ObstacleInfo>& obsts, const carlet::Veh::SensorData& sensor_data,
+    const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    if (state.x > 20.0f && !sensor_data.lanelets.empty() && !sensor_data.lanelets.at(2).empty()) {
-        return Behavior::CH_LEFT;
+    const auto lead_idx{find_lead_idx(obsts)};
+    const auto has_lead{lead_idx >= 0};
+    const auto lead_vel{has_lead ? obsts.at(lead_idx).vel : -1.0f};
+    const auto has_left_lane{!sensor_data.lanelets.empty() && !sensor_data.lanelets.at(2).empty()};
+    const auto has_right_lane{!sensor_data.lanelets.empty() && !sensor_data.lanelets.at(-2).empty()};
+    const auto should_ch_lane{has_lead && (lead_vel < target_spd)};
+
+    std::cout << "has_lead, lead_vel: " << has_lead << ", " << lead_vel << "\n";
+    if (should_ch_lane) {
+        return has_left_lane
+            ? Behavior::CH_LEFT
+            : has_right_lane
+                ? Behavior::CH_RIGHT
+                : Behavior::NOMINAL;
     }
+
     return Behavior::NOMINAL;
 }
 
 void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& state, carlet::Veh::Control& ctrl)
 {
-    acc(sensor_data, state, ctrl);
-    const auto behavior{behavior_plan(sensor_data, state, ctrl)};
+    std::vector<ObstacleInfo> obsts;
+    obstacle_preprocessor(sensor_data, obsts);
+    acc(obsts, state, ctrl);
+    const auto behavior{behavior_plan(obsts, sensor_data, state, ctrl)};
     if (behavior == Behavior::CH_LEFT) {
         ch_lane(sensor_data, state, ctrl, 1);
     } else if (behavior == Behavior::CH_RIGHT) {
