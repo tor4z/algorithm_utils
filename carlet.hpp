@@ -1,7 +1,6 @@
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
-#include <iostream>
 #include <mutex>
 #include <vector>
 #include <unordered_map>
@@ -174,11 +173,12 @@ public:
     bool step(float dt);
     void render();
 
-    Veh::Obs full_obs() { return Veh::Obs{.vehs=vehs_, .map=map_}; }
     int create_ctrl_veh(const VehModel& model, int lane_idx);
     void gen_random_vehs(int n, float min_vel, float max_vel);
     Veh* get_ctrl_veh(int idx) const;
-    inline Veh* get_ctrl_veh() const { return get_ctrl_veh(first_controllable_idx_); };
+
+    inline Veh::Obs full_obs() { return Veh::Obs{.vehs=vehs_, .map=map_}; }
+    inline Veh* get_ctrl_veh() const { return get_ctrl_veh(first_ctrl_idx_); };
     inline Map& map() { return map_; }
 private:
     Simulator();
@@ -193,7 +193,7 @@ private:
     std::vector<Veh*> vehs_;
     Camera3D camera_;
     Map map_;
-    int first_controllable_idx_;
+    int first_ctrl_idx_;
 }; // class Simulator
 
 #define CARLET_M_PI 3.14159265358979323846
@@ -779,7 +779,7 @@ void Simulator::map_to_mesh_model()
 }
 
 Simulator::Simulator()
-    : first_controllable_idx_(-1)
+    : first_ctrl_idx_(-1)
 {
     InitWindow(CARLET_WIN_WIDTH, CARLET_WIN_HEIGHT, CARLET_WIN_TITLE);
     SetTargetFPS(CARLET_TARGET_FPS);
@@ -812,9 +812,9 @@ void Simulator::update_camera()
     static Vector3 camera_pos_offset{camera_.position};
     static Vector3 camera_target_offset{camera_.target};
 
-    if (!vehs_.empty() && first_controllable_idx_ >= 0) {
+    if (!vehs_.empty() && first_ctrl_idx_ >= 0) {
         // camera follow this first controllable car    
-        const auto& veh{vehs_.at(first_controllable_idx_)};
+        const auto& veh{vehs_.at(first_ctrl_idx_)};
         camera_.target.z = camera_target_offset.z - veh->state().x - 80;
         camera_.target.x = camera_target_offset.x;
         camera_.target.y = camera_target_offset.y;
@@ -891,8 +891,8 @@ void Simulator::render()
         // Draw in 2d space
         {
             // Show veh speed
-            if (!vehs_.empty() && first_controllable_idx_ >= 0) {
-                const auto veh{vehs_.at(first_controllable_idx_)};
+            if (!vehs_.empty() && first_ctrl_idx_ >= 0) {
+                const auto veh{vehs_.at(first_ctrl_idx_)};
                 constexpr auto font_size{32};
                 constexpr auto buf_size{32};
                 constexpr auto str_len{8};   // I guess
@@ -1008,8 +1008,8 @@ int Simulator::create_ctrl_veh(const VehModel& model, int lane_idx)
     veh->color = next_color();
 
     vehs_.push_back(veh);
-    first_controllable_idx_ = vehs_.size() - 1;
-    return first_controllable_idx_;
+    first_ctrl_idx_ = vehs_.size() - 1;
+    return first_ctrl_idx_;
 }
 
 Veh* Simulator::get_ctrl_veh(int idx) const
