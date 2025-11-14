@@ -1,12 +1,5 @@
-#include <cstddef>
 #include <ctime>
-#include <cstdlib>
 #include <iostream>
-#include <raylib.h>
-#include <raymath.h>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
 #define CARLET_IMPLEMENTATION
 #include "carlet.hpp"

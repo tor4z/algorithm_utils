@@ -1,3 +1,56 @@
+#if 0 // example
+
+#include <ctime>
+
+#define CARLET_IMPLEMENTATION
+#include "carlet.hpp"
+
+void naive_plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& ego_state,
+    carlet::Veh::Control& ctrl)
+{
+    (void)sensor_data;
+    (void)ego_state;
+    
+    ctrl.steer = 0.0f;
+    ctrl.accel = 1.0f;
+}
+
+int main(int argc, char** argv)
+{
+    (void)argc;
+    (void)argv;
+
+    srand(time(NULL));
+
+    const auto straight_road{carlet::Road::gen_straight(
+        Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
+        Vector3{.x=2000.0f, .y=0.0f, .z=0.0f},
+        2, 3.7f)};
+
+    auto sim{carlet::Simulator::instance()};
+    sim->map().road_net.push_back(straight_road);
+    sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
+    sim->gen_random_vehs(80,
+        carlet::kmph_to_mps(40.0),
+        carlet::kmph_to_mps(120.0));
+
+    carlet::Veh* v{};
+    carlet::Veh::Control ctrl{};
+
+    while (sim->is_running()) {
+        if ((v = sim->get_ctrl_veh()) != nullptr) {
+            naive_plan(v->sensor_data(), v->state(), ctrl);
+            v->act(ctrl);
+        }
+        sim->step(0.02f);
+        sim->render();
+    }
+    return 0;
+}
+
+#endif // example
+
+
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
