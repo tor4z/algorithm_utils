@@ -1189,7 +1189,9 @@ void Simulator::sensing_lanelets(Veh* ego)
     constexpr auto max_sample_waypoints{100};
     constexpr auto start_sample_waypoints{10};
     for (const auto& road: map_.road_net) {
-        if (road.lanes.empty()) continue;
+        if (road.lanes.empty()) {
+            continue;
+        }
 
         const auto num_lanes{road.lanes.size()};
         int lane_idx;
@@ -1498,27 +1500,29 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
         const auto& lane{lanes.at(i)};
         if (lane.empty()) continue;
 
+        const auto last_idx{static_cast<int>(lane.size()) - 1};
         int low{0};
-        int high{static_cast<int>(lane.size()) - 1};
-        while (low <= high) {
-            const auto mid{(low + high) / 2};
+        int high{last_idx};
+        int mid{};
+        while (low < high) {
+            mid = (low + high) / 2;
             const auto& waypoint_low{lane.at(low)};
             const auto& waypoint_high{lane.at(high)};
-            if (low >= high) {
-                const auto& min_waypoint{lane.at(mid)};
-                const auto dist{Vector3Distance(p, min_waypoint.c)};
-                if (dist < min_dist) {
-                    min_dist = dist;
-                    waypoint_idx = mid;
-                }
-                break;
-            }
             const auto low_dist{Vector3Distance(p, waypoint_low.c)};
             const auto high_dist{Vector3Distance(p, waypoint_high.c)};
             if (low_dist < high_dist) {
                 high = max(mid - 1, 0);
             } else {
-                low = min(mid + 1, static_cast<int>(lane.size()) - 1);
+                low = min(mid + 1, last_idx);
+            }
+        }
+
+        if (low >= high) {
+            const auto& min_waypoint{lane.at(mid)};
+            const auto dist{Vector3Distance(p, min_waypoint.c)};
+            if (dist < min_dist) {
+                min_dist = dist;
+                waypoint_idx = mid;
             }
         }
 
