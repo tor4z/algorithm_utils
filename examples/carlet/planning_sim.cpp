@@ -31,6 +31,16 @@ void lka(const Scene& scene, carlet::Veh::Control& ctrl)
     }
 }
 
+float follow_accel(const carlet::Veh::State& ego, const ObstacleInfo& lead)
+{
+    const auto x_diff{lead.center.x};
+    const auto ht{x_diff / ego.vel};
+    const auto desire_x{target_ht * ego.vel};
+    const auto dist_error{x_diff - desire_x};
+    const auto vel_error{lead.vel - ego.vel};
+    return dist_error * 0.05 + vel_error * 0.2;
+}
+
 void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
 {
     const auto cruise_error{target_spd - scene.ego.vel};
@@ -44,16 +54,7 @@ void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
         ctrl.accel = cruise_error * 0.1f;
     } else {
         const auto& lead{scene.obsts.at(lead_idx)};
-        const auto& ego{scene.ego};
-
-        const auto x_diff{lead.center.x};
-        const auto ht{x_diff / ego.vel};
-        const auto desire_x{target_ht * ego.vel};
-        const auto dist_error{x_diff - desire_x};
-        const auto vel_error{lead.vel - ego.vel};
-        // std::cout << "x_diff: " << x_diff << "dist_error: " << dist_error
-        //     << ", vel_error: " << vel_error << '\n';
-        ctrl.accel = dist_error * 0.05 + vel_error * 0.2;
+        ctrl.accel = follow_accel(scene.ego, lead);
     }
 
     ctrl.accel = carlet::min(ctrl.accel, 2.0f);
@@ -108,27 +109,47 @@ struct Agent
     virtual ActResult act(Action a, State s)
     {
         int target_lane_id{0};
+        int lead_idx{-1};
+        bool target_lane_valid{true};
 
         switch (a) {
         case Action::NOMINAL:
             target_lane_id = 0;
+            lead_idx = s.scene->lead_idx;
             break;
         case Action::CH_LEFT:
             target_lane_id = 1;
+            lead_idx = s.scene->left_lead_idx;
             break;
         case Action::CH_RIGHT:
             target_lane_id = -1;
+            lead_idx = s.scene->right_lead_idx;
             break;
         }
 
         ActResult ar;
         ar.state.lane_id = target_lane_id;
-        ar.reward = 0.5f;
+        if (s.scene->lanes.at(target_lane_id).samples.empty()) target_lane_valid = false;
 
-        if (s.last_act != a) {
-            ar.reward = 0.0f;
+        if (lead_idx == -1) {
+            ar.reward = 1.0f;
+        } else {
+            const auto lead{s.scene->obsts.at(lead_idx)};
+            const auto target_accel{follow_accel(s.scene->ego, lead)};
+            if (target_accel > 0.0f) {
+                ar.reward = lead.vel - target_spd;
+            } else {
+                ar.reward += target_accel;
+            }
         }
 
+        if (s.last_act != a) {
+            ar.reward -= 0.5f;
+        }
+
+        if (!target_lane_valid) {
+            ar.reward = -10000.0f;
+        }
         return ar;
     }
 }; // struct Agent
@@ -145,8 +166,8 @@ Action behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
     Agent agent{};
 
     State state{.scene=&scene, .last_act=last_act};
-    Action best_act;
-    float best_reward{-1.0f};
+    Action best_act{};
+    float best_reward{-10000.0f};
 
     for (auto act: actions) {
         const auto this_ar{agent.act(act, state)};
