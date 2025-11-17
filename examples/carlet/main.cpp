@@ -245,14 +245,19 @@ void lka(const Scene& scene, carlet::Veh::Control& ctrl)
     }
 }
 
-void acc(const Scene& scene, carlet::Veh::Control& ctrl)
+void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
 {
     const auto cruise_error{target_spd - scene.ego.vel};
+    int lead_idx{target_lane_id == 0
+        ? scene.lead_idx
+        : target_lane_id == -1
+            ? scene.right_lead_idx
+            : scene.left_lead_idx};
 
-    if (scene.lead_idx < 0) {
+    if (lead_idx < 0) {
         ctrl.accel = cruise_error * 0.1f;
     } else {
-        const auto& lead{scene.obsts.at(scene.lead_idx)};
+        const auto& lead{scene.obsts.at(lead_idx)};
         const auto& ego{scene.ego};
 
         const auto x_diff{lead.center.x};
@@ -370,21 +375,25 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
 {
     Scene scene{sensor_data, ego_state};
 
-    acc(scene, ctrl);
+    int target_lane_id{0};
     const auto behavior{behavior_plan(scene, ctrl)};
 
     switch (behavior) {
     case Behavior::CH_LEFT:
         ch_lane(scene, ctrl, 1);
+        target_lane_id = 1;
         break;
     case Behavior::CH_RIGHT:
         ch_lane(scene, ctrl, -1);
+        target_lane_id = -1;
         break;
     case Behavior::NOMINAL:
     default:
         lka(scene, ctrl);
         break;
     }
+
+    acc(scene, target_lane_id, ctrl);
 
     std::cout << "behavior: " << static_cast<int>(behavior)
         << ", steer: " << ctrl.steer
