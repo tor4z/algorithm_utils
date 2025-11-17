@@ -311,7 +311,7 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #endif // CARLET_HPP_
 
 
-#define CARLET_IMPLEMENTATION // delete me
+// #define CARLET_IMPLEMENTATION // delete me
 
 
 #ifdef CARLET_IMPLEMENTATION
