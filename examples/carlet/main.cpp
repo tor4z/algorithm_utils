@@ -6,6 +6,7 @@
 
 
 constexpr double target_spd{carlet::kmph_to_mps(150.0)};
+constexpr double target_ht{2.5};
 
 template<typename T>
 inline constexpr T avg2(const T& a, const T& b) { return (a + b) / 2; }
@@ -63,8 +64,10 @@ struct Scene
     std::vector<ObstacleInfo> obsts;
     carlet::Veh::State ego;
     int lead_idx;
+    int left_lead_idx;
+    int right_lead_idx;
 private:
-    int find_lead_idx();
+    int find_lead_idx(const LaneInfo& lane);
     int project_obst_lane(const carlet::Veh::Obstacle& obst, const LaneInfo& lane);
     void setup_obst(const carlet::Veh::Obstacle& obst);
     void setup_lane(const std::vector<Vector3>& left,
@@ -105,7 +108,9 @@ Scene::Scene(const carlet::Veh::SensorData& sensor_data,
         setup_obst(obst);
     }
 
-    lead_idx = find_lead_idx();
+    lead_idx = find_lead_idx(lanes.find(0)->second);
+    left_lead_idx = find_lead_idx(lanes.find(1)->second);
+    right_lead_idx = find_lead_idx(lanes.find(-1)->second);
 }
 
 void Scene::setup_obst(const carlet::Veh::Obstacle& obst)
@@ -164,18 +169,19 @@ int Scene::project_obst_lane(const carlet::Veh::Obstacle& obst, const LaneInfo& 
 {
     if (lane.samples.empty()) return -1;
 
+    const int last_idx{static_cast<int>(lane.samples.size()) - 1};
     int low{0};
-    int high{static_cast<int>(lane.samples.size()) - 1};
+    int high{last_idx};
     float dist_low{Vector3DistanceSqr(obst.center, lane.samples.at(low).center)};
     float dist_high{Vector3DistanceSqr(obst.center, lane.samples.at(high).center)};
 
     while (low < high) {
         const auto mid{(low + high) / 2};
         if (dist_low < dist_high) {
-            high = mid - 1;
+            high = carlet::max(mid - 1, 0);
             dist_high = Vector3DistanceSqr(obst.center, lane.samples.at(high).center);
         } else {
-            low = mid + 1;
+            low = carlet::min(mid + 1, last_idx);
             dist_low = Vector3DistanceSqr(obst.center, lane.samples.at(low).center);
         }
     }
@@ -183,20 +189,19 @@ int Scene::project_obst_lane(const carlet::Veh::Obstacle& obst, const LaneInfo& 
     return (low + high) / 2;
 }
 
-int Scene::find_lead_idx()
+int Scene::find_lead_idx(const LaneInfo& lane)
 {
     int lead_idx{-1};
     float lead_center_x{1000.0f /* Big enough x by default*/};
-    if (lanes.find(0) != lanes.end()) {
-        for (auto obst_idx: lanes.at(0).obsts) {
-            const auto& obst{obsts.at(obst_idx)};
-            if (obst.center.x < 0.0f) continue;
-            if (obst.center.x < lead_center_x) {
-                lead_center_x = obst.center.x;
-                lead_idx = obst_idx;
-            }
+    for (auto obst_idx: lane.obsts) {
+        const auto& obst{obsts.at(obst_idx)};
+        if (obst.center.x < 0.0f) continue;
+        if (obst.center.x < lead_center_x) {
+            lead_center_x = obst.center.x;
+            lead_idx = obst_idx;
         }
     }
+
     return lead_idx;
 }
 
@@ -250,13 +255,14 @@ void acc(const Scene& scene, carlet::Veh::Control& ctrl)
         const auto& lead{scene.obsts.at(scene.lead_idx)};
         const auto& ego{scene.ego};
 
-        const auto target_ht{2.5};
         const auto x_diff{lead.center.x};
         const auto ht{x_diff / ego.vel};
         const auto desire_x{target_ht * ego.vel};
         const auto dist_error{x_diff - desire_x};
         const auto vel_error{lead.vel - ego.vel};
-        ctrl.accel = dist_error * 0.2 + vel_error * 0.4;
+        std::cout << "x_diff: " << x_diff << "dist_error: " << dist_error
+            << ", vel_error: " << vel_error << '\n';
+        ctrl.accel = dist_error * 0.05 + vel_error * 0.2;
     }
 
     ctrl.accel = carlet::min(ctrl.accel, 2.0f);
@@ -267,7 +273,7 @@ void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
     const auto preview_length{30.0f};
     ctrl.steer = 0.0f;
 
-    if (ch_lane_id != -1 || ch_lane_id != 1) return;
+    if (ch_lane_id != -1 && ch_lane_id != 1) return;
     const auto& target_lane{scene.lanes.at(ch_lane_id)};
     if (target_lane.samples.empty()) return;
 
@@ -293,23 +299,71 @@ enum class Behavior
     CH_RIGHT
 }; // enum class Behavior
 
+bool is_ch_lane_cmd(Behavior b)
+{
+    return b == Behavior::CH_RIGHT ||
+        b == Behavior::CH_LEFT;
+}
+
 Behavior behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
 {
+    constexpr float max_spd{1000.0f};
+    constexpr float max_lead_s{1000.0f};
+    constexpr float exp_spd_gain{1.0f};
+
     const auto has_lead{scene.lead_idx >= 0};
-    const auto lead_vel{has_lead ? scene.obsts.at(scene.lead_idx).vel : -1.0f};
+    const auto has_left_lead{scene.left_lead_idx >= 0};
+    const auto has_right_lead{scene.right_lead_idx >= 0};
+
     const auto has_left_lane{!scene.lanes.at(1).samples.empty()};
     const auto has_right_lane{!scene.lanes.at(-1).samples.empty()};
-    const auto should_ch_lane{has_lead && (lead_vel < target_spd)};
 
-    if (should_ch_lane) {
-        return has_left_lane
-            ? Behavior::CH_LEFT
-            : has_right_lane
-                ? Behavior::CH_RIGHT
-                : Behavior::NOMINAL;
+    const auto lead_vel{has_lead ? scene.obsts.at(scene.lead_idx).vel : max_spd};
+    const auto left_lead_vel{has_left_lead
+        ? scene.obsts.at(scene.left_lead_idx).vel
+        : has_left_lane ? max_spd : -1.0f};
+    const auto right_lead_vel{has_right_lead
+        ? scene.obsts.at(scene.right_lead_idx).vel
+        : has_right_lane ? max_spd : -1.0f};
+
+    const auto left_lead_ht{has_left_lead
+        ? scene.obsts.at(scene.left_lead_idx).center.x / scene.ego.vel
+        : max_lead_s};
+    const auto right_lead_ht{has_right_lead
+        ? scene.obsts.at(scene.right_lead_idx).center.x / scene.ego.vel
+        : max_lead_s};
+
+    static Behavior last_behavior{Behavior::NOMINAL};
+    static float last_lane_offset{0.0f};
+    Behavior behavior{Behavior::NOMINAL};
+
+    const auto& lane0{scene.lanes.at(0)};
+    if (lane0.samples.empty()) return behavior;
+
+    const auto& sample{lane0.samples.at(0)};
+    const auto lane_offset{sample.left.y + sample.right.y};
+    const auto lane_changed{carlet::abs(last_lane_offset - lane_offset) > 1.0f};
+
+    int fast_lane{0};
+    if (left_lead_vel > right_lead_vel) {
+        if (left_lead_vel > (lead_vel + exp_spd_gain) && left_lead_ht > target_ht) fast_lane = 1;
+    } else {
+        if (right_lead_vel > (lead_vel + exp_spd_gain)  && right_lead_ht > target_ht) fast_lane = -1;
     }
 
-    return Behavior::NOMINAL;
+    if (fast_lane == 1) {
+        behavior = Behavior::CH_LEFT;
+    } else if (fast_lane == -1) {
+        behavior = Behavior::CH_RIGHT;
+    }
+
+    if (is_ch_lane_cmd(last_behavior) && !lane_changed) {
+        behavior = last_behavior;
+    }
+
+    last_lane_offset = lane_offset;
+    last_behavior = behavior;
+    return behavior;
 }
 
 void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& ego_state, carlet::Veh::Control& ctrl)
@@ -332,7 +386,10 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
         break;
     }
 
-    std::cout << "behavior: " << static_cast<int>(behavior) << ", steer: " << ctrl.steer << "\n";
+    std::cout << "behavior: " << static_cast<int>(behavior)
+        << ", steer: " << ctrl.steer
+        << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
+        << ", accel: " << ctrl.accel << "\n";
 }
 
 int main(int argc, char** argv)
@@ -350,9 +407,9 @@ int main(int argc, char** argv)
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
     sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
-    sim->gen_random_vehs(80,
+    sim->gen_random_vehs(20,
         carlet::kmph_to_mps(40.0),
-        carlet::kmph_to_mps(120.0));
+        carlet::kmph_to_mps(80.0));
 
     carlet::Veh* v{};
     carlet::Veh::Control ctrl{};
