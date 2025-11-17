@@ -1,5 +1,4 @@
 #include <ctime>
-#include <iostream>
 
 #define CARLET_IMPLEMENTATION
 #include "carlet.hpp"
@@ -265,8 +264,8 @@ void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
         const auto desire_x{target_ht * ego.vel};
         const auto dist_error{x_diff - desire_x};
         const auto vel_error{lead.vel - ego.vel};
-        std::cout << "x_diff: " << x_diff << "dist_error: " << dist_error
-            << ", vel_error: " << vel_error << '\n';
+        // std::cout << "x_diff: " << x_diff << "dist_error: " << dist_error
+        //     << ", vel_error: " << vel_error << '\n';
         ctrl.accel = dist_error * 0.05 + vel_error * 0.2;
     }
 
@@ -395,10 +394,10 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
 
     acc(scene, target_lane_id, ctrl);
 
-    std::cout << "behavior: " << static_cast<int>(behavior)
-        << ", steer: " << ctrl.steer
-        << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
-        << ", accel: " << ctrl.accel << "\n";
+    // std::cout << "behavior: " << static_cast<int>(behavior)
+    //     << ", steer: " << ctrl.steer
+    //     << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
+    //     << ", accel: " << ctrl.accel << "\n";
 }
 
 int main(int argc, char** argv)
