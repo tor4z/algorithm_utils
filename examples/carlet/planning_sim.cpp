@@ -1,5 +1,6 @@
 #include "common.hpp"
 #include "settings.hpp"
+#include <iostream>
 
 #define CARLET_IMPLEMENTATION
 #include "carlet.hpp"
@@ -82,78 +83,81 @@ void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
     }
 }
 
-enum class Behavior
+enum class Action
 {
     NOMINAL = 0,
     CH_LEFT,
     CH_RIGHT
-}; // enum class Behavior
+}; // enum class Action
 
-bool is_ch_lane_cmd(Behavior b)
+struct State
 {
-    return b == Behavior::CH_RIGHT ||
-        b == Behavior::CH_LEFT;
-}
+    const Scene* scene;
+    Action last_act;
+    int lane_id;
+}; // struct State
 
-Behavior behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
+struct ActResult
 {
-    constexpr float max_spd{1000.0f};
-    constexpr float max_lead_s{1000.0f};
-    constexpr float exp_spd_gain{1.0f};
+    State state;
+    float reward;
+}; // struct ActResult
 
-    const auto has_lead{scene.lead_idx >= 0};
-    const auto has_left_lead{scene.left_lead_idx >= 0};
-    const auto has_right_lead{scene.right_lead_idx >= 0};
+struct Agent
+{
+    virtual ActResult act(Action a, State s)
+    {
+        int target_lane_id{0};
 
-    const auto has_left_lane{!scene.lanes.at(1).samples.empty()};
-    const auto has_right_lane{!scene.lanes.at(-1).samples.empty()};
+        switch (a) {
+        case Action::NOMINAL:
+            target_lane_id = 0;
+            break;
+        case Action::CH_LEFT:
+            target_lane_id = 1;
+            break;
+        case Action::CH_RIGHT:
+            target_lane_id = -1;
+            break;
+        }
 
-    const auto lead_vel{has_lead ? scene.obsts.at(scene.lead_idx).vel : max_spd};
-    const auto left_lead_vel{has_left_lead
-        ? scene.obsts.at(scene.left_lead_idx).vel
-        : has_left_lane ? max_spd : -1.0f};
-    const auto right_lead_vel{has_right_lead
-        ? scene.obsts.at(scene.right_lead_idx).vel
-        : has_right_lane ? max_spd : -1.0f};
+        ActResult ar;
+        ar.state.lane_id = target_lane_id;
+        ar.reward = 0.5f;
 
-    const auto left_lead_ht{has_left_lead
-        ? scene.obsts.at(scene.left_lead_idx).center.x / scene.ego.vel
-        : max_lead_s};
-    const auto right_lead_ht{has_right_lead
-        ? scene.obsts.at(scene.right_lead_idx).center.x / scene.ego.vel
-        : max_lead_s};
+        if (s.last_act != a) {
+            ar.reward = 0.0f;
+        }
 
-    static Behavior last_behavior{Behavior::NOMINAL};
-    static float last_lane_offset{0.0f};
-    Behavior behavior{Behavior::NOMINAL};
+        return ar;
+    }
+}; // struct Agent
 
-    const auto& lane0{scene.lanes.at(0)};
-    if (lane0.samples.empty()) return behavior;
+static Action actions[]{
+    Action::NOMINAL,
+    Action::CH_LEFT,
+    Action::CH_RIGHT,
+};
 
-    const auto& sample{lane0.samples.at(0)};
-    const auto lane_offset{sample.left.y + sample.right.y};
-    const auto lane_changed{carlet::abs(last_lane_offset - lane_offset) > 1.0f};
+Action behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
+{
+    static Action last_act{};
+    Agent agent{};
 
-    int fast_lane{0};
-    if (left_lead_vel > right_lead_vel) {
-        if (left_lead_vel > (lead_vel + exp_spd_gain) && left_lead_ht > target_ht) fast_lane = 1;
-    } else {
-        if (right_lead_vel > (lead_vel + exp_spd_gain)  && right_lead_ht > target_ht) fast_lane = -1;
+    State state{.scene=&scene, .last_act=last_act};
+    Action best_act;
+    float best_reward{-1.0f};
+
+    for (auto act: actions) {
+        const auto this_ar{agent.act(act, state)};
+        if (this_ar.reward > best_reward) {
+            best_reward = this_ar.reward;
+            best_act = act;
+        }
     }
 
-    if (fast_lane == 1) {
-        behavior = Behavior::CH_LEFT;
-    } else if (fast_lane == -1) {
-        behavior = Behavior::CH_RIGHT;
-    }
-
-    if (is_ch_lane_cmd(last_behavior) && !lane_changed) {
-        behavior = last_behavior;
-    }
-
-    last_lane_offset = lane_offset;
-    last_behavior = behavior;
-    return behavior;
+    last_act = best_act;
+    return best_act;
 }
 
 void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& ego_state, carlet::Veh::Control& ctrl)
@@ -164,15 +168,15 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
     const auto behavior{behavior_plan(scene, ctrl)};
 
     switch (behavior) {
-    case Behavior::CH_LEFT:
+    case Action::CH_LEFT:
         ch_lane(scene, ctrl, 1);
         target_lane_id = 1;
         break;
-    case Behavior::CH_RIGHT:
+    case Action::CH_RIGHT:
         ch_lane(scene, ctrl, -1);
         target_lane_id = -1;
         break;
-    case Behavior::NOMINAL:
+    case Action::NOMINAL:
     default:
         lka(scene, ctrl);
         break;
@@ -180,10 +184,10 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
 
     acc(scene, target_lane_id, ctrl);
 
-    // std::cout << "behavior: " << static_cast<int>(behavior)
-    //     << ", steer: " << ctrl.steer
-    //     << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
-    //     << ", accel: " << ctrl.accel << "\n";
+    std::cout << "behavior: " << static_cast<int>(behavior)
+        << ", steer: " << ctrl.steer
+        << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
+        << ", accel: " << ctrl.accel << "\n";
 }
 
 int main(int argc, char** argv)

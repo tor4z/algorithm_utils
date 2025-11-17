@@ -1,5 +1,6 @@
 add_executable(simple_planning
     simple_planning.cpp
+    common.cpp
 )
 
 target_link_libraries(simple_planning
@@ -9,6 +10,7 @@ target_link_libraries(simple_planning
 
 add_executable(planning_sim
     planning_sim.cpp
+    common.cpp
 )
 
 target_link_libraries(planning_sim
