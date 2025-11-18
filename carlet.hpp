@@ -50,12 +50,15 @@ int main(int argc, char** argv)
 
 #endif // example
 
+// #define CARLET_IMPLEMENTATION
 
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
 
 #include <mutex>
+#include <cmath>
 #include <vector>
+#include <iostream>
 #include <unordered_map>
 #include <raylib.h>
 
@@ -128,11 +131,13 @@ struct VehModel
     float max_steer;
     float min_steer;
     float max_accel;
+    Vector3 shape;
 }; // struct VehModel
 
 struct Object
 {
-    Object();
+    Object() : Object({.x=0.0f, .y=0.0f, .z=0.0f}) {}
+    explicit Object(const Vector3& shp);
 
     const int id;
     Vector3 shape;
@@ -183,37 +188,48 @@ struct Veh: public Object
         double yaw_rate;
         double steer_angle;
 
+        Vector3 position() const { return Vector3{.x=static_cast<float>(x),
+                                                  .y=static_cast<float>(y),
+                                                  .z=static_cast<float>(z)}; }
         double distance(const Vector3& other) const;
         double distance(const State& other) const;
-        static State init_with(float init_x, float init_y, float init_vel);
+        static State init_with(float init_x, float init_y, float init_z, float init_vel);
     }; // struct State
 
+    Veh(float init_vel, const VehModel& model)
+        : Veh(0.0, 0.0f, init_vel, model, false)
+    {}
+
     Veh(float init_x, float init_y, float init_vel, const VehModel& model, bool controllable)
-        : Object()
+        : Object(model.shape)
         , steer_(0.0f)
         , accel_(0.0f)
-        , state_(State::init_with(init_x, init_y, init_vel))
-        , vm_(model)
-        , controllable_(controllable)
+        , state_(State::init_with(init_x, init_y, init_vel, model.shape.z / 2.0f))
+        , vm(model)
         , idm_cruise_vel_(init_vel)
+        , controllable_(controllable)
+        , valid_(true)
     {}
 
     void act(const Control& control);
     inline const State& state() const { return state_; }
     inline const SensorData& sensor_data() const { return sensor_data_; }
+    inline bool valid() const { return valid_; }
 private:
     friend class Simulator;
     float steer_;
     float accel_;
     State state_;
     SensorData sensor_data_;
-    const VehModel vm_;
-    const bool controllable_;
+    const VehModel vm;
     const float idm_cruise_vel_;
+    const bool controllable_;
+    bool valid_;
 
     void dynamic_act(float steer, float accel, float dt);
     void idm_act(const Control& control);
     bool idm_plan(const Veh::Obs& full_obs, Control& control);
+    bool idm_reset_position(const Vector3& ref_position, const Simulator* simulator);
     bool step(float dt);
 }; // struct Veh
 
@@ -229,15 +245,16 @@ public:
     int create_ctrl_veh(const VehModel& model, int lane_idx);
     void gen_random_vehs(int n, float min_vel, float max_vel);
     Veh* get_ctrl_veh(int idx) const;
+    bool collision_with_any_veh(const Veh* veh) const;
 
     inline Veh::Obs full_obs() { return Veh::Obs{.vehs=vehs_, .map=map_}; }
     inline Veh* get_ctrl_veh() const { return get_ctrl_veh(first_ctrl_idx_); };
     inline Map& map() { return map_; }
+    inline const Map& map() const { return map_; }
 private:
     Simulator();
     void map_to_mesh_model();
     void update_camera();
-    bool collision_with_any_veh(const Veh* veh);
     void draw_mini_map();
     void sensing(Veh* ego, float dt);
     void sensing_obsts(Veh* ego);
@@ -250,6 +267,9 @@ private:
 }; // class Simulator
 
 #define CARLET_M_PI 3.14159265358979323846
+
+template<typename T>
+struct AlwaysFalse { enum {value = false}; };
 
 template<typename T>
 inline constexpr T pow2(T v) { return v * v; }
@@ -282,6 +302,33 @@ template<typename T>
 inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * CARLET_M_PI; }
 
 template<typename T>
+inline float distance(const T& a, const T& b)
+{
+    static_assert(AlwaysFalse<T>::value, "Not supportted");
+    return 0.0f;    // supress compiler warning
+}
+
+template<>
+inline float distance<Vector3>(const Vector3& a, const Vector3& b)
+{
+    return std::sqrt(pow2(a.x - b.x) + pow2(a.y - b.y) + pow2(a.z - b.z));
+}
+
+template<>
+inline float distance<Vector2>(const Vector2& a, const Vector2& b)
+{
+    return std::sqrt(pow2(a.x - b.x) + pow2(a.y - b.y));
+}
+
+template<>
+inline float distance<Veh>(const Veh& a, const Veh& b)
+{
+    return std::sqrt(pow2(a.state().x - b.state().x) +
+                     pow2(a.state().y - b.state().y) +
+                     pow2(a.state().z - b.state().z));
+}
+
+template<typename T>
 inline constexpr T normalize_heading(T rad)
 {
     constexpr float pi_mul_2{CARLET_M_PI * 2.0f};
@@ -309,9 +356,6 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #endif // _GLIBCXX_OSTREAM
 
 #endif // CARLET_HPP_
-
-
-// #define CARLET_IMPLEMENTATION // delete me
 
 
 #ifdef CARLET_IMPLEMENTATION
@@ -369,21 +413,17 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #   define CARLET_LANELET_WIDTH     0.1f   // meter, which is 10cm
 #endif // CARLET_LANELET_WIDTH
 
-#ifndef CARLET_DEF_VEH_LEN
-#   define CARLET_DEF_VEH_LEN       4.2f    // meter
-#endif // CARLET_DEF_VEH_LEN
-
-#ifndef CARLET_DEF_VEH_WIDTH
-#   define CARLET_DEF_VEH_WIDTH     1.98f   // meter
-#endif // CARLET_DEF_VEH_WIDTH
-
-#ifndef CARLET_DEF_VEH_HEIGHT
-#   define CARLET_DEF_VEH_HEIGHT    1.6f    // meter
-#endif // CARLET_DEF_VEH_HEIGHT
-
 #ifndef CARLET_MAX_GEN_VEH_TRIES
 #   define CARLET_MAX_GEN_VEH_TRIES 10
 #endif // CARLET_MAX_GEN_VEH_TRIES
+
+#ifndef CARLET_IDM_GEN_MAX_DIST
+#   define CARLET_IDM_GEN_MAX_DIST 300.0f
+#endif // CARLET_IDM_MAX_DIST
+
+#ifndef CARLET_IDM_GEN_MIN_DIST
+#   define CARLET_IDM_GEN_MIN_DIST 100.0f
+#endif // CARLET_IDM_MIN_DIST
 
 #define CARLET_ARR_LEN(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
@@ -439,8 +479,9 @@ struct Vector3i
     int z;
 };
 
-const Mesh& gen_veh_mesh();
-bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx);
+const Mesh& gen_veh_mesh(const Vector3& shape);
+bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, float half_veh_width,
+    int& lane_idx, int& waypoint_idx);
 bool check_veh_collision(const Veh* a, const Veh* b);
 
 template<typename T>
@@ -459,6 +500,7 @@ const VehModel tesla {
     .max_steer = deg_to_rad(25.0f),     // rad
     .min_steer = deg_to_rad(-25.0f),    // rad
     .max_accel = 5.0f,                      // m/s^2
+    .shape = Vector3{.x = 4.2f, .y = 1.98f, .z = 1.6f}
 }; // tesla
 
 static const VehModel all_veh_models[] {
@@ -521,14 +563,14 @@ inline int gen_id()
     return result;
 }
 
-Object::Object() : id(gen_id()) {}
+Object::Object(const Vector3& shp) : id(gen_id()), shape(shp) {}
 
-Veh::State Veh::State::init_with(float init_x, float init_y, float init_vel)
+Veh::State Veh::State::init_with(float init_x, float init_y, float init_z, float init_vel)
 {
     return State{
         .x = init_x,
         .y = init_y,
-        .z = CARLET_DEF_VEH_HEIGHT / 2.0f,
+        .z = init_z,
         .vel = init_vel,
         .accel = 0.0f,
         .jerk = 0.0f,
@@ -935,6 +977,7 @@ void Simulator::render()
             {
                 // draw vehicles
                 for (const auto& veh: vehs_) {
+                    if (!veh->valid()) continue;
                     DrawModel(veh->model, zero_vec, 1.0f, veh->color);
                     DrawModelWires(veh->model, zero_vec, 1.0f, WHITE);
                 }
@@ -1053,11 +1096,8 @@ int Simulator::create_ctrl_veh(const VehModel& model, int lane_idx)
         init_y = lane.at(0).c.y;
     }
 
-    auto veh{new Veh{init_x, init_y, 0.0f, model, true}};
-    veh->shape.x = CARLET_DEF_VEH_LEN;
-    veh->shape.y = CARLET_DEF_VEH_WIDTH;
-    veh->shape.z = CARLET_DEF_VEH_HEIGHT;
-    veh->model = LoadModelFromMesh(gen_veh_mesh());
+    auto veh{new Veh{init_x, init_y, model.shape.z / 2.0f, model, true}};
+    veh->model = LoadModelFromMesh(gen_veh_mesh(veh->shape));
     veh->color = next_color();
 
     vehs_.push_back(veh);
@@ -1074,58 +1114,15 @@ Veh* Simulator::get_ctrl_veh(int idx) const
     return veh;
 }
 
-bool Simulator::collision_with_any_veh(const Veh* veh)
+bool Simulator::collision_with_any_veh(const Veh* veh) const
 {
     for (const auto other_veh: vehs_) {
+        if (!other_veh->valid()) continue;
         if (check_veh_collision(veh, other_veh)) {
             return true;
         }
     }
     return false;
-}
-
-void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
-{
-    const auto& roads{map_.road_net};
-    const auto num_roads{roads.size()};
-    const auto num_veh_each_road{n / num_roads};
-
-    if (n <= 0) return;
-
-    for (const auto& road: roads) {
-        const auto num_lane{road.lanes.size()};
-        int n_tries{0};
-        for (int i = 0; i < num_veh_each_road;) {
-            const auto lane_idx{rand_ab(0ul, num_lane)};
-            const auto& target_lane{road.lanes.at(lane_idx)};
-            const auto sample_idx{rand_ab(0ul, target_lane.size())};
-            const auto& waypoint{target_lane.at(sample_idx)};
-            const auto veh_vel{rand_ab(min_vel, max_vel)};
-
-            Veh veh{waypoint.c.x, waypoint.c.y, veh_vel, veh_model::random(), false};
-            veh.shape.x = CARLET_DEF_VEH_LEN;
-            veh.shape.y = CARLET_DEF_VEH_WIDTH;
-            veh.shape.z = CARLET_DEF_VEH_HEIGHT;
-
-            // collision check
-            ++n_tries;
-            if (collision_with_any_veh(&veh)) {
-                if (n_tries > CARLET_MAX_GEN_VEH_TRIES) {
-                    TraceLog(LOG_WARNING, "Too many vehicles to generate in such a small map, "
-                        "generating random vehicles stopped.");
-                    break;
-                }
-                continue;
-            }
-
-            // properties for rendering
-            veh.color = next_color();
-            veh.model = LoadModelFromMesh(gen_veh_mesh());
-            vehs_.push_back(new Veh(veh));
-            ++i;
-            n_tries = 0;
-        }
-    }
 }
 
 void Simulator::sensing_obsts(Veh* ego)
@@ -1134,6 +1131,8 @@ void Simulator::sensing_obsts(Veh* ego)
     ego->sensor_data_.obsts.clear();
     for (const auto v: vehs_) {
         if (v->id == ego->id) continue;
+        if (!v->valid()) continue;
+
         const auto dist{ego->state().distance(v->state())};
         if (dist > CARLET_MAX_SENSOR_RANGE) continue;
         const auto polar_angle{std::atan2(v->state().y - ego->state().y, v->state().x - ego->state().x)};
@@ -1196,7 +1195,8 @@ void Simulator::sensing_lanelets(Veh* ego)
         const auto num_lanes{road.lanes.size()};
         int lane_idx;
         int waypoint_idx;
-        if (find_lane_info(road.lanes, veh_position, lane_idx, waypoint_idx)) {
+        if (find_lane_info(road.lanes, veh_position, ego->shape.y / 2.0f,
+            lane_idx, waypoint_idx)) {
             const auto left_lanelet{lane_idx == 0
                 ? &road.left_edge
                 : &road.lanelets.at(lane_idx - 1)};
@@ -1267,6 +1267,9 @@ bool Simulator::step(float dt)
 {
     Veh::Control idm_control;
     const Veh::Obs obs{full_obs()};
+    const auto& ctrl_veh{vehs_.at(first_ctrl_idx_)};
+    const Vector3 ctrl_veh_position{ctrl_veh->state().position()};
+
     for (auto& veh: vehs_) {
         if (veh->controllable_) {
             veh->step(dt);
@@ -1278,9 +1281,83 @@ bool Simulator::step(float dt)
         if (veh->idm_plan(obs, idm_control)) {
             veh->idm_act(idm_control);
             veh->step(dt);
+            const auto dist_to_ctrl_veh{distance(*ctrl_veh, *veh)};
+            if (dist_to_ctrl_veh > CARLET_IDM_GEN_MAX_DIST) {
+                if (!veh->idm_reset_position(ctrl_veh_position, this)) {
+                    veh->valid_ = false;
+                } else {
+                    veh->valid_ = true;
+                }
+            }
         }
     }
+
     return true;
+}
+
+void Simulator::gen_random_vehs(int n, float min_vel, float max_vel)
+{
+    if (n <= 0) return;
+
+    Vector3 ref_position{};
+    if (first_ctrl_idx_ >= 0) {
+        ref_position = vehs_.at(first_ctrl_idx_)->state().position();
+    }
+
+    for (int i = 0; i < n; ++i) {
+        Veh veh{rand_ab(min_vel, max_vel), veh_model::random()};
+        if (veh.idm_reset_position(ref_position, this)) {
+            // properties for rendering
+            veh.color = next_color();
+            veh.model = LoadModelFromMesh(gen_veh_mesh(veh.shape));
+            vehs_.push_back(new Veh(veh));
+        }
+    }
+
+    // std::cout << "vehs_.size: " << vehs_.size() << "\n";
+    // std::sort(vehs_.begin() + 1, vehs_.end(), [](const Veh* a, const Veh* b) {
+    //     return a->state().x > b->state().x;
+    // });
+    // for (auto veh: vehs_) {
+    //     std::cout << veh->state() << "\n";
+    // }
+}
+
+bool Veh::idm_reset_position(const Vector3& ref_position, const Simulator* simulator)
+{
+    int n_tries{0};
+
+    const auto& road{simulator->map().road_net.at(0)};
+    const auto num_lane{road.lanes.size()};
+
+    while (n_tries < CARLET_MAX_GEN_VEH_TRIES) {
+        const auto lane_idx{rand_ab(0ul, num_lane)};
+        const auto& target_lane{road.lanes.at(lane_idx)};
+        const auto sample_idx{rand_ab(0ul, target_lane.size())};
+        const auto& waypoint{target_lane.at(sample_idx)};
+        state_ = State::init_with(waypoint.c.x, waypoint.c.y, shape.z / 2.0f, state_.vel);
+        // TODO: optimize me
+
+        const auto dist_to_ref{state_.distance(ref_position)};
+        if (dist_to_ref > CARLET_IDM_GEN_MAX_DIST || dist_to_ref < CARLET_IDM_GEN_MIN_DIST) {
+            continue;
+        }
+
+        ++n_tries;
+        // collision check
+        if (simulator->collision_with_any_veh(this)) {
+            if (n_tries > CARLET_MAX_GEN_VEH_TRIES) {
+                TraceLog(LOG_WARNING, "Too many vehicles to generate in such a small map, "
+                    "generating random vehicles stopped.");
+                break;
+            }
+            continue;
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
@@ -1341,7 +1418,8 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
             if (road.lanes.empty()) continue;
             int lane_idx;
             int waypoint_idx;
-            if (find_lane_info(road.lanes, ego_preview, lane_idx, waypoint_idx)) {
+            if (find_lane_info(road.lanes, ego_preview, shape.y / 2.0f,
+                lane_idx, waypoint_idx)) {
                 curr_waypoint = &road.lanes.at(lane_idx).at(waypoint_idx);
                 break;
             }
@@ -1358,8 +1436,8 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 
 void Veh::idm_act(const Control& control)
 {
-    steer_ = clamp(control.steer, vm_.min_steer, vm_.max_steer);
-    accel_ = clamp(control.accel, -vm_.max_accel, vm_.max_accel);
+    steer_ = clamp(control.steer, vm.min_steer, vm.max_steer);
+    accel_ = clamp(control.accel, -vm.max_accel, vm.max_accel);
 }
 
 void Veh::act(const Control& control)
@@ -1389,11 +1467,11 @@ void Veh::dynamic_act(float steer, float accel, float dt)
     state_.vel += accel * dt;
     state_.accel = accel;
 
-    const auto slip_angle{std::atan2(vm_.gc_to_back_axle * std::tan(state_.steer_angle), vm_.wheel_base)};
+    const auto slip_angle{std::atan2(vm.gc_to_back_axle * std::tan(state_.steer_angle), vm.wheel_base)};
     const auto vel_angle{slip_angle + state_.yaw};
     const auto dy{state_.vel * std::sin(vel_angle)};
     const auto dx{state_.vel * std::cos(vel_angle)};
-    const auto r{vm_.wheel_base / (std::tan(state_.steer_angle) * std::cos(slip_angle) + CARLET_EPS)};
+    const auto r{vm.wheel_base / (std::tan(state_.steer_angle) * std::cos(slip_angle) + CARLET_EPS)};
     state_.x += dx * dt;
     state_.y += dy * dt;
     state_.yaw_rate = state_.vel / r;
@@ -1477,20 +1555,21 @@ bool check_veh_collision(const Veh* a, const Veh* b)
     return false;
 }
 
-const Mesh& gen_veh_mesh()
+const Mesh& gen_veh_mesh(const Vector3& shape)
 {
     static bool mesh_uploaded{false};
     static Mesh mesh;
 
     if (!mesh_uploaded) {
-        mesh = GenMeshCube(CARLET_DEF_VEH_WIDTH, CARLET_DEF_VEH_HEIGHT, CARLET_DEF_VEH_LEN);
+        mesh = GenMeshCube(shape.y, shape.z, shape.x);
         UploadMesh(&mesh, false);
         mesh_uploaded = true;
     }
     return mesh;
 }
 
-bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int& lane_idx, int& waypoint_idx)
+bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, float half_veh_width,
+    int& lane_idx, int& waypoint_idx)
 {
     lane_idx = -1;
     waypoint_idx = -1;
@@ -1526,7 +1605,7 @@ bool find_lane_info(const std::vector<Road::Lane>& lanes, const Vector3& p, int&
             }
         }
 
-        if (min_dist < (lane.at(0).width / 2.0f + CARLET_DEF_VEH_WIDTH / 2.0f)) {
+        if (min_dist < (lane.at(0).width / 2.0f + half_veh_width)) {
             // early stop
             lane_idx = i;
             break;
