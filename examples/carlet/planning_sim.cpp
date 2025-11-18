@@ -1,10 +1,34 @@
 #include "common.hpp"
 #include "settings.hpp"
-#include <iostream>
 
 #define CARLET_IMPLEMENTATION
 #include "carlet.hpp"
 
+enum class Action
+{
+    NOMINAL = 0,
+    CH_LEFT,
+    CH_RIGHT
+}; // enum class Action
+
+struct State
+{
+    const Scene* scene;
+    Action last_act;
+    int lane_id;
+}; // struct State
+
+struct ActResult
+{
+    State state;
+    float reward;
+}; // struct ActResult
+
+static Action actions[]{
+    Action::NOMINAL,
+    Action::CH_LEFT,
+    Action::CH_RIGHT,
+};
 
 void lka(const Scene& scene, carlet::Veh::Control& ctrl)
 {
@@ -84,26 +108,6 @@ void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
     }
 }
 
-enum class Action
-{
-    NOMINAL = 0,
-    CH_LEFT,
-    CH_RIGHT
-}; // enum class Action
-
-struct State
-{
-    const Scene* scene;
-    Action last_act;
-    int lane_id;
-}; // struct State
-
-struct ActResult
-{
-    State state;
-    float reward;
-}; // struct ActResult
-
 struct Agent
 {
     virtual ActResult act(Action a, State s)
@@ -129,17 +133,42 @@ struct Agent
 
         ActResult ar;
         ar.state.lane_id = target_lane_id;
-        if (s.scene->lanes.at(target_lane_id).samples.empty()) target_lane_valid = false;
+        if (s.scene->lanes.at(target_lane_id).samples.empty()) {
+            target_lane_valid = false;
+        }
 
         if (lead_idx == -1) {
             ar.reward = 1.0f;
         } else {
-            const auto lead{s.scene->obsts.at(lead_idx)};
+            const auto& lead{s.scene->obsts.at(lead_idx)};
             const auto target_accel{follow_accel(s.scene->ego, lead)};
-            if (target_accel > 0.0f) {
-                ar.reward = lead.vel - target_spd;
+            if (target_accel >= 1.0f) {
+                ar.reward += lead.vel - target_spd;
             } else {
                 ar.reward += target_accel;
+            }
+        }
+
+        int nearest_back_obst_idx{-1};
+        float max_back_obst_x{-100.0f /* max back obstacle dist we care */};
+        const auto& obsts{s.scene->lanes.at(target_lane_id).obsts};
+        for (size_t i = 0; i < obsts.size(); ++i) {
+            const auto obst_idx{obsts.at(i)};
+            const auto& obst{s.scene->obsts.at(obst_idx)};
+            if (obst.center.x > 0.0f) continue;
+            if (obst.center.x > max_back_obst_x) {
+                max_back_obst_x = obst.center.x;
+                nearest_back_obst_idx = obst_idx;
+            }
+        }
+
+        if (a == Action::NOMINAL) {
+            ar.reward += 0.5f;
+        } else {
+            // for change lane action
+            if (nearest_back_obst_idx >= 0) {
+                const auto& obst{s.scene->obsts.at(nearest_back_obst_idx)};
+                if (obst.center.x > -10.0f) ar.reward += -10000.0f;
             }
         }
 
@@ -154,23 +183,17 @@ struct Agent
     }
 }; // struct Agent
 
-static Action actions[]{
-    Action::NOMINAL,
-    Action::CH_LEFT,
-    Action::CH_RIGHT,
-};
-
 Action behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
 {
     static Action last_act{};
     Agent agent{};
 
     State state{.scene=&scene, .last_act=last_act};
-    Action best_act{};
+    Action best_act{Action::NOMINAL};
     float best_reward{-10000.0f};
 
     for (auto act: actions) {
-        const auto this_ar{agent.act(act, state)};
+        const auto& this_ar{agent.act(act, state)};
         if (this_ar.reward > best_reward) {
             best_reward = this_ar.reward;
             best_act = act;
@@ -205,10 +228,10 @@ void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& 
 
     acc(scene, target_lane_id, ctrl);
 
-    std::cout << "behavior: " << static_cast<int>(behavior)
-        << ", steer: " << ctrl.steer
-        << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
-        << ", accel: " << ctrl.accel << "\n";
+    // std::cout << "behavior: " << static_cast<int>(behavior)
+    //           << ", steer: " << ctrl.steer
+    //           << ", spd: " << carlet::mps_to_kmph(ego_state.vel)
+    //           << ", accel: " << ctrl.accel << "\n";
 }
 
 int main(int argc, char** argv)
@@ -220,15 +243,15 @@ int main(int argc, char** argv)
 
     const auto straight_road{carlet::Road::gen_straight(
         Vector3{.x=0.0f, .y=0.0f, .z=0.0f},
-        Vector3{.x=2000.0f, .y=0.0f, .z=0.0f},
-        2, 3.7f)};
+        Vector3{.x=5000.0f, .y=0.0f, .z=0.0f},
+        4, 3.7f)};
 
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
     sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
     sim->gen_random_vehs(20,
-        carlet::kmph_to_mps(40.0),
-        carlet::kmph_to_mps(80.0));
+        carlet::kmph_to_mps(40.0f),
+        carlet::kmph_to_mps(150.0f));
 
     carlet::Veh* v{};
     carlet::Veh::Control ctrl{};
