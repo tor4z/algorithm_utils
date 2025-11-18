@@ -67,6 +67,7 @@ float follow_accel(const carlet::Veh::State& ego, const ObstacleInfo& lead)
 
 void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
 {
+    ctrl.accel = 0.0f;
     const auto cruise_error{target_spd - scene.ego.vel};
     int lead_idx{target_lane_id == 0
         ? scene.lead_idx
@@ -80,8 +81,6 @@ void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
         const auto& lead{scene.obsts.at(lead_idx)};
         ctrl.accel = follow_accel(scene.ego, lead);
     }
-
-    ctrl.accel = carlet::min(ctrl.accel, 2.0f);
 }
 
 void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
@@ -249,7 +248,7 @@ int main(int argc, char** argv)
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
     sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
-    sim->gen_random_vehs(20,
+    sim->gen_random_vehs(0,
         carlet::kmph_to_mps(40.0f),
         carlet::kmph_to_mps(150.0f));
 

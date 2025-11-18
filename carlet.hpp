@@ -1,3 +1,4 @@
+#include <iostream>
 #if 0 // example
 
 #include <ctime>
@@ -50,7 +51,7 @@ int main(int argc, char** argv)
 
 #endif // example
 
-// #define CARLET_IMPLEMENTATION
+#define CARLET_IMPLEMENTATION
 
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
@@ -58,7 +59,6 @@ int main(int argc, char** argv)
 #include <mutex>
 #include <cmath>
 #include <vector>
-#include <iostream>
 #include <unordered_map>
 #include <raylib.h>
 
@@ -127,10 +127,14 @@ struct Map
 struct VehModel
 {
     float wheel_base;
+    float wheel_radius;
     float gc_to_back_axle;  // gc: gravity center
     float max_steer;
     float min_steer;
     float max_accel;
+    float Cd;              // Coefficient of Drag
+    float mass;
+    float max_hp;          // max horse power
     Vector3 shape;
 }; // struct VehModel
 
@@ -203,7 +207,7 @@ struct Veh: public Object
     Veh(float init_x, float init_y, float init_vel, const VehModel& model, bool controllable)
         : Object(model.shape)
         , steer_(0.0f)
-        , accel_(0.0f)
+        , accelerator_ratio_(0.0f)
         , state_(State::init_with(init_x, init_y, init_vel, model.shape.z / 2.0f))
         , vm(model)
         , idm_cruise_vel_(init_vel)
@@ -218,7 +222,8 @@ struct Veh: public Object
 private:
     friend class Simulator;
     float steer_;
-    float accel_;
+    float accelerator_ratio_;
+    float brake_ratio_;
     State state_;
     SensorData sensor_data_;
     const VehModel vm;
@@ -226,6 +231,10 @@ private:
     const bool controllable_;
     bool valid_;
 
+    void lon_pid_control(const Control& control);
+    float wheel_torque(float accelerator_ratio) const;
+    float wheel_friction() const;
+    float air_resistance() const;
     void dynamic_act(float steer, float accel, float dt);
     void idm_act(const Control& control);
     bool idm_plan(const Veh::Obs& full_obs, Control& control);
@@ -267,6 +276,7 @@ private:
 }; // class Simulator
 
 #define CARLET_M_PI 3.14159265358979323846
+#define CARLET_G    9.8                     // m/s^2
 
 template<typename T>
 struct AlwaysFalse { enum {value = false}; };
@@ -294,6 +304,12 @@ inline constexpr T mps_to_kmph(T mps) { return mps * static_cast<T>(3.6); }
 
 template<typename T>
 inline constexpr T kmph_to_mps(T kmph) { return kmph / static_cast<T>(3.6); }
+
+template<typename T>
+inline constexpr T hp_to_kw(T hp) { return hp * static_cast<T>(0.735); }
+
+template<typename T>
+inline constexpr T kw_to_hp(T kw) { return kw * static_cast<T>(1.36); }
 
 template<typename T>
 inline constexpr T rad_to_deg(T rad) { return rad / CARLET_M_PI * 180.0; }
@@ -425,29 +441,37 @@ std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state);
 #   define CARLET_IDM_GEN_MIN_DIST 100.0f
 #endif // CARLET_IDM_MIN_DIST
 
+#ifndef CARLET_AIR_DENSITY
+#   define CARLET_AIR_DENSITY           1.293f   // kg/m3
+#endif // CARLET_AIR_DENSITY
+
+#ifndef CARLET_ROAD_FRICTION_FACTOR
+#   define CARLET_ROAD_FRICTION_FACTOR  0.6f
+#endif // CARLET_ROAD_FRICTION_FACTOR
+
 #define CARLET_ARR_LEN(arr)         (sizeof(arr) / sizeof((arr)[0]))
 
 
 #ifdef _GLIBCXX_OSTREAM
-std::ostream& operator<<(std::ostream& os, const Vector2& vec)
+inline std::ostream& operator<<(std::ostream& os, const Vector2& vec)
 {
     os << "(" << vec.x << ", " << vec.y << ")";
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const Vector3& vec)
+inline std::ostream& operator<<(std::ostream& os, const Vector3& vec)
 {
     os << "(" << vec.x << ", " << vec.y << ", " << vec.z << ")";
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, float* vec)
+inline std::ostream& operator<<(std::ostream& os, float* vec)
 {
     os << "(" << vec[0] << ", " << vec[1] << ", " << vec[2] << ")";
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state)
+inline std::ostream& operator<<(std::ostream& os, const carlet::Veh::State& state)
 {
     os << std::fixed << std::setprecision(2) << "State {"
        << "x: " << state.x
@@ -495,12 +519,16 @@ inline T rand_ab(T a, T b)
 namespace veh_model {
 
 const VehModel tesla {
-    .wheel_base = 2.8f,                     // meter
-    .gc_to_back_axle = 1.5f,                // meter
-    .max_steer = deg_to_rad(25.0f),     // rad
-    .min_steer = deg_to_rad(-25.0f),    // rad
-    .max_accel = 5.0f,                      // m/s^2
-    .shape = Vector3{.x = 4.2f, .y = 1.98f, .z = 1.6f}
+    .wheel_base         = 2.8f,                     // meter
+    .wheel_radius       = 0.33f,                    // meter
+    .gc_to_back_axle    = 1.5f,                     // meter
+    .max_steer          = deg_to_rad(25.0f),        // rad
+    .min_steer          = deg_to_rad(-25.0f),       // rad
+    .max_accel          = 5.0f,                     // m/s^2
+    .Cd                 = 0.23f,                    // Coefficient of Drag
+    .mass               = 1836.0f,                  // kg
+    .max_hp             = 90.0f,                    // hp
+    .shape              = Vector3{.x = 4.2f, .y = 1.98f, .z = 1.6f}
 }; // tesla
 
 static const VehModel all_veh_models[] {
@@ -562,6 +590,16 @@ inline int gen_id()
     cnt = (cnt + 1) % CARLET_MAX_ID;
     return result;
 }
+
+template<typename T, size_t N>
+struct Intergrator
+{
+    void append(T v){}
+    T sum() {}
+private:
+    T data[N];
+    int idx;
+}; // struct Intergrator
 
 Object::Object(const Vector3& shp) : id(gen_id()), shape(shp) {}
 
@@ -1398,7 +1436,9 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
             const auto dist_error{x_diff - desire_x};
             const auto vel_error{lead->state().vel - state().vel};
             ctrl.accel = dist_error * follow_pid_dist_p + vel_error * follow_pid_vel_p;
-            if (state().vel > idm_cruise_vel_) ctrl.accel = min(0.0f, ctrl.accel);
+            if (state().vel > idm_cruise_vel_) {
+                ctrl.accel = min(0.0f, ctrl.accel);
+            }
         }
 
         ctrl.accel = carlet::min(ctrl.accel, max_cruise_accel);
@@ -1437,7 +1477,7 @@ bool Veh::idm_plan(const Veh::Obs& obs, Control& ctrl)
 void Veh::idm_act(const Control& control)
 {
     steer_ = clamp(control.steer, vm.min_steer, vm.max_steer);
-    accel_ = clamp(control.accel, -vm.max_accel, vm.max_accel);
+    lon_pid_control(control);
 }
 
 void Veh::act(const Control& control)
@@ -1447,15 +1487,82 @@ void Veh::act(const Control& control)
     idm_act(control);
 }
 
+void Veh::lon_pid_control(const Control& control)
+{
+    float accelerator_ratio{0.0f};
+    float brake_ratio{0.0f};
+
+    const auto accel_error{control.accel - state().accel};
+
+    if (control.accel > 0.0f) {
+        accelerator_ratio = accel_error * 0.1f;
+    } else {
+        brake_ratio = accel_error * 0.1f;
+    }
+
+    std::cout << id << " target accel: " << control.accel
+        << ", curr accel: " << state().accel
+        << ", errro: " << accel_error
+        << ", accelerator: " << accelerator_ratio_
+        << ", brake: " << brake_ratio_ << "\n";
+
+    accelerator_ratio_ = clamp(accelerator_ratio, 0.0f, 1.0f);
+    brake_ratio_ = clamp(brake_ratio, 0.0f, 1.0f);
+}
+
 bool Veh::step(float dt)
 {
-    dynamic_act(steer_, accel_, dt);
+    if (accelerator_ratio_ > 0.0f && brake_ratio_ > 0.0f) {
+        TRACELOG(LOG_WARNING, "Bad driving behavior, both accelerator and brake are actived");
+        accelerator_ratio_ = 0.0f;
+    }
+
+    float force{};
+    const auto air_resist{air_resistance()};
+    const auto wheel_fri{wheel_friction()};
+
+    if (accelerator_ratio_ > 0.0f) {
+        const auto wheel_torq{wheel_torque(accelerator_ratio_)};
+        const auto wheel_force{wheel_torq / vm.wheel_radius};
+        force = wheel_force - air_resist;
+    } else {
+        force = -air_resist;
+        force -= brake_ratio_ * wheel_fri;
+    }
+
+    const auto accel{force / vm.mass};
+    std::cout << "real accel: " << accel << "\n";
+
+    dynamic_act(steer_, accel, dt);
     // setup render model
     model.transform = MatrixRotateY(state().yaw);
     model.transform.m12 = -state().y;
     model.transform.m13 = state().z;
     model.transform.m14 = -state().x;
     return true;
+}
+
+float Veh::air_resistance() const
+{
+    const auto frontal_area{vm.shape.y * vm.shape.z};
+    return 0.5f * CARLET_AIR_DENSITY * frontal_area * vm.Cd * pow2(state().vel);
+}
+
+float Veh::wheel_friction() const
+{
+    return vm.mass * CARLET_G * CARLET_ROAD_FRICTION_FACTOR;
+}
+
+float Veh::wheel_torque(float accelerator_ratio) const
+{
+    constexpr auto pi_mul_2{2.0f * CARLET_M_PI};
+    const auto wheel_perimeter{pi_mul_2 * vm.wheel_radius};
+    const auto wheel_rot_spd{state().vel / wheel_perimeter * 60.0f};   // r/min
+    const auto curr_hp{accelerator_ratio * vm.max_hp};
+    // T = (1000 * 60 * P) / (2 * pi * n)
+    const auto wheel_torq{1000.0f * 60.0f * hp_to_kw(curr_hp) /
+        (pi_mul_2 * wheel_rot_spd)};
+    return wheel_torq;
 }
 
 void Veh::dynamic_act(float steer, float accel, float dt)
