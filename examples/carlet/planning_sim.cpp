@@ -30,11 +30,11 @@ static Action actions[]{
     Action::CH_RIGHT,
 };
 
-void lka(const Scene& scene, carlet::Veh::Control& ctrl)
+void lka(const Scene& scene, carlet::Veh::AngleControl& ctrl)
 {
     constexpr auto preview_length{30.0f};
 
-    ctrl.steer = 0.0f;
+    ctrl.eps_angle = 0.0f;
     if (scene.lanes.at(0).samples.empty()) {
         return;
     }
@@ -51,7 +51,7 @@ void lka(const Scene& scene, carlet::Veh::Control& ctrl)
     if (waypoint_idx >= 0) {
         const auto& curr_waypoint{curr_lane.samples.at(waypoint_idx).center};
         const auto error{ego_preview.y - curr_waypoint.y};
-        ctrl.steer = -error * 0.01;
+        ctrl.eps_angle = -error * 0.01;
     }
 }
 
@@ -65,7 +65,7 @@ float follow_accel(const carlet::Veh::State& ego, const ObstacleInfo& lead)
     return dist_error * 0.05 + vel_error * 0.2;
 }
 
-void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
+void acc(const Scene& scene, int target_lane_id, carlet::Veh::AngleControl& ctrl)
 {
     ctrl.accel = 0.0f;
     const auto cruise_error{target_spd - scene.ego.vel};
@@ -83,10 +83,10 @@ void acc(const Scene& scene, int target_lane_id, carlet::Veh::Control& ctrl)
     }
 }
 
-void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
+void ch_lane(const Scene& scene, carlet::Veh::AngleControl& ctrl, int ch_lane_id)
 {
     const auto preview_length{30.0f};
-    ctrl.steer = 0.0f;
+    ctrl.eps_angle = 0.0f;
 
     if (ch_lane_id != -1 && ch_lane_id != 1) return;
     const auto& target_lane{scene.lanes.at(ch_lane_id)};
@@ -103,7 +103,7 @@ void ch_lane(const Scene& scene, carlet::Veh::Control& ctrl, int ch_lane_id)
     if (waypoint_idx >= 0) {
         const auto& preview_waypoint{target_lane.samples.at(waypoint_idx)};
         const auto error{ego_preview.y - preview_waypoint.center.y};
-        ctrl.steer = -error * 0.01;
+        ctrl.eps_angle = -error * 0.01;
     }
 }
 
@@ -182,7 +182,7 @@ struct Agent
     }
 }; // struct Agent
 
-Action behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
+Action behavior_plan(const Scene& scene, carlet::Veh::AngleControl& ctrl)
 {
     static Action last_act{};
     Agent agent{};
@@ -203,7 +203,7 @@ Action behavior_plan(const Scene& scene, carlet::Veh::Control& ctrl)
     return best_act;
 }
 
-void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& ego_state, carlet::Veh::Control& ctrl)
+void plan(const carlet::Veh::SensorData& sensor_data, const carlet::Veh::State& ego_state, carlet::Veh::AngleControl& ctrl)
 {
     Scene scene{sensor_data, ego_state};
 
@@ -253,7 +253,7 @@ int main(int argc, char** argv)
         carlet::kmph_to_mps(150.0f));
 
     carlet::Veh* v{};
-    carlet::Veh::Control ctrl{};
+    carlet::Veh::AngleControl ctrl{};
 
     while (sim->is_running()) {
         if ((v = sim->get_ctrl_veh()) != nullptr) {
