@@ -135,6 +135,8 @@ struct VehModel
     float Cd;              // Coefficient of Drag
     float mass;
     float max_hp;          // max horse power
+    float hp_loss;         // hp loss
+    float gear_friction;   // gear friction
     Vector3 shape;
 }; // struct VehModel
 
@@ -219,6 +221,8 @@ struct Veh: public Object
     inline const State& state() const { return state_; }
     inline const SensorData& sensor_data() const { return sensor_data_; }
     inline bool valid() const { return valid_; }
+
+    const VehModel vm;
 private:
     friend class Simulator;
     float steer_;
@@ -226,15 +230,15 @@ private:
     float brake_ratio_;
     State state_;
     SensorData sensor_data_;
-    const VehModel vm;
     const float idm_cruise_vel_;
     const bool controllable_;
     bool valid_;
 
-    void lon_pid_control(const Control& control);
     float wheel_torque(float accelerator_ratio) const;
     float wheel_friction() const;
     float air_resistance() const;
+    float wheel_rot_spd() const;    // r/min
+    void lon_pid_control(const Control& control);
     void dynamic_act(float steer, float accel, float dt);
     void idm_act(const Control& control);
     bool idm_plan(const Veh::Obs& full_obs, Control& control);
@@ -275,7 +279,9 @@ private:
     int first_ctrl_idx_;
 }; // class Simulator
 
-#define CARLET_M_PI 3.14159265358979323846
+#define CARLET_PI   3.14159265358979323846
+#define CARLET_2_PI 6.283185307179586
+
 #define CARLET_G    9.8                     // m/s^2
 
 template<typename T>
@@ -312,10 +318,10 @@ template<typename T>
 inline constexpr T kw_to_hp(T kw) { return kw * static_cast<T>(1.36); }
 
 template<typename T>
-inline constexpr T rad_to_deg(T rad) { return rad / CARLET_M_PI * 180.0; }
+inline constexpr T rad_to_deg(T rad) { return rad / CARLET_PI * 180.0; }
 
 template<typename T>
-inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * CARLET_M_PI; }
+inline constexpr T deg_to_rad(T deg) { return deg / 180.0 * CARLET_PI; }
 
 template<typename T>
 inline float distance(const T& a, const T& b)
@@ -347,12 +353,11 @@ inline float distance<Veh>(const Veh& a, const Veh& b)
 template<typename T>
 inline constexpr T normalize_heading(T rad)
 {
-    constexpr float pi_mul_2{CARLET_M_PI * 2.0f};
-    while (rad > CARLET_M_PI) {
-        rad -= pi_mul_2;
+    while (rad > CARLET_PI) {
+        rad -= CARLET_2_PI;
     }
-    while (rad < -CARLET_M_PI) {
-        rad += pi_mul_2;
+    while (rad < -CARLET_PI) {
+        rad += CARLET_2_PI;
     }
     return rad;
 }
@@ -527,7 +532,9 @@ const VehModel tesla {
     .max_accel          = 5.0f,                     // m/s^2
     .Cd                 = 0.23f,                    // Coefficient of Drag
     .mass               = 1836.0f,                  // kg
-    .max_hp             = 90.0f,                    // hp
+    .max_hp             = 190.0f,                   // hp
+    .hp_loss            = 0.17f,                    // precent of hp
+    .gear_friction      = 400.0f,                   // gear friction, newton
     .shape              = Vector3{.x = 4.2f, .y = 1.98f, .z = 1.6f}
 }; // tesla
 
@@ -594,8 +601,17 @@ inline int gen_id()
 template<typename T, size_t N>
 struct Intergrator
 {
-    void append(T v){}
-    T sum() {}
+    void append(T v)
+    {
+        data[idx] = v;
+        idx = (idx + 1) % N;
+    }
+    T sum()
+    {
+        T res{};
+        for (int i = 0; i < N; ++i) res += data[i];
+        return res;
+    }
 private:
     T data[N];
     int idx;
@@ -1494,17 +1510,24 @@ void Veh::lon_pid_control(const Control& control)
 
     const auto accel_error{control.accel - state().accel};
 
-    if (control.accel > 0.0f) {
-        accelerator_ratio = accel_error * 0.1f;
+    float target_force{vm.mass * control.accel};
+    target_force += vm.gear_friction;
+    target_force += air_resistance();
+    
+    if (target_force > 0.0f) {
+        // accelerator control
+        // P = (2 * pi * n * T) / (1000 * 60)
+        const auto wheel_torq{target_force * vm.wheel_radius};
+        const auto expect_power{(CARLET_2_PI * wheel_torq * wheel_rot_spd()) / (1000.0f * 60.0f)};
+        const auto expect_power_with_loss{expect_power / (1.0f - vm.hp_loss)};
+        const auto expect_accelerator_ratio{expect_power_with_loss / hp_to_kw(vm.max_hp)};
+        accelerator_ratio = expect_accelerator_ratio + accel_error * 0.001f;
     } else {
-        brake_ratio = accel_error * 0.1f;
+        // brake control
+        const auto wheel_fri{wheel_friction()};
+        const auto expect_brake_ratio{-target_force / wheel_fri};
+        brake_ratio = expect_brake_ratio + accel_error * -0.001f;
     }
-
-    std::cout << id << " target accel: " << control.accel
-        << ", curr accel: " << state().accel
-        << ", errro: " << accel_error
-        << ", accelerator: " << accelerator_ratio_
-        << ", brake: " << brake_ratio_ << "\n";
 
     accelerator_ratio_ = clamp(accelerator_ratio, 0.0f, 1.0f);
     brake_ratio_ = clamp(brake_ratio, 0.0f, 1.0f);
@@ -1519,19 +1542,19 @@ bool Veh::step(float dt)
 
     float force{};
     const auto air_resist{air_resistance()};
-    const auto wheel_fri{wheel_friction()};
+    const auto wheel_fri{wheel_friction()}; // newton
 
     if (accelerator_ratio_ > 0.0f) {
         const auto wheel_torq{wheel_torque(accelerator_ratio_)};
-        const auto wheel_force{wheel_torq / vm.wheel_radius};
-        force = wheel_force - air_resist;
+        const auto wheel_driving_force{wheel_torq / vm.wheel_radius};
+        force = wheel_driving_force;
     } else {
-        force = -air_resist;
-        force -= brake_ratio_ * wheel_fri;
+        force = -brake_ratio_ * wheel_fri;
     }
 
+    force -= air_resist;
+    force -= vm.gear_friction;
     const auto accel{force / vm.mass};
-    std::cout << "real accel: " << accel << "\n";
 
     dynamic_act(steer_, accel, dt);
     // setup render model
@@ -1553,15 +1576,19 @@ float Veh::wheel_friction() const
     return vm.mass * CARLET_G * CARLET_ROAD_FRICTION_FACTOR;
 }
 
+float Veh::wheel_rot_spd() const
+{
+    const auto wheel_perimeter{CARLET_2_PI * vm.wheel_radius};
+    return state().vel / wheel_perimeter * 60.0f;   // r/min
+}
+
 float Veh::wheel_torque(float accelerator_ratio) const
 {
-    constexpr auto pi_mul_2{2.0f * CARLET_M_PI};
-    const auto wheel_perimeter{pi_mul_2 * vm.wheel_radius};
-    const auto wheel_rot_spd{state().vel / wheel_perimeter * 60.0f};   // r/min
-    const auto curr_hp{accelerator_ratio * vm.max_hp};
+    const auto hp{accelerator_ratio * vm.max_hp};
+    const auto hp_with_loss{hp * (1.0f - vm.hp_loss)};
     // T = (1000 * 60 * P) / (2 * pi * n)
-    const auto wheel_torq{1000.0f * 60.0f * hp_to_kw(curr_hp) /
-        (pi_mul_2 * wheel_rot_spd)};
+    const auto wheel_torq{1000.0f * 60.0f * hp_to_kw(hp_with_loss) /
+        (CARLET_2_PI * wheel_rot_spd())};
     return wheel_torq;
 }
 

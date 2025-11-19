@@ -248,7 +248,7 @@ int main(int argc, char** argv)
     auto sim{carlet::Simulator::instance()};
     sim->map().road_net.push_back(straight_road);
     sim->create_ctrl_veh(carlet::veh_model::tesla, 1);
-    sim->gen_random_vehs(0,
+    sim->gen_random_vehs(20,
         carlet::kmph_to_mps(40.0f),
         carlet::kmph_to_mps(150.0f));
 
