@@ -51,7 +51,7 @@ int main(int argc, char** argv)
 
 #endif // example
 
-// #define CARLET_IMPLEMENTATION
+#define CARLET_IMPLEMENTATION
 
 #ifndef CARLET_HPP_
 #define CARLET_HPP_
@@ -191,9 +191,9 @@ struct Veh: public Object
 
     struct Eps
     {
-        float steer_wheel_angle;
-        float steer_wheel_spd;
-        float steer_torq;
+        float angle;    // rad
+        float spd;      // rad/s 
+        float torq;     // N/m
     }; // struct Eps
 
     struct State
@@ -224,7 +224,8 @@ struct Veh: public Object
         : Object(model.shape)
         , front_wheel_steer_(0.0f)
         , accelerator_ratio_(0.0f)
-        , state_(State::init_with(init_x, init_y, init_vel, model.shape.z / 2.0f))
+        , brake_ratio_(0.0f)
+        , state_(State::init_with(init_x, init_y, model.shape.z / 2.0f, init_vel))
         , vm(model)
         , idm_cruise_vel_(init_vel)
         , controllable_(controllable)
@@ -236,6 +237,7 @@ struct Veh: public Object
     inline const State& state() const { return state_; }
     inline const SensorData& sensor_data() const { return sensor_data_; }
     inline bool valid() const { return valid_; }
+    inline const Eps& eps() const { return eps_; }
 
     const VehModel vm;
 private:
@@ -287,6 +289,7 @@ private:
     void map_to_mesh_model();
     void update_camera();
     void draw_mini_map();
+    void draw_control_info();
     void sensing(Veh* ego, float dt);
     void sensing_obsts(Veh* ego);
     void sensing_lanelets(Veh* ego);
@@ -1076,26 +1079,102 @@ void Simulator::render()
 
         // draw mini map for the first controllable vehicle
         draw_mini_map();
+        // draw control info for the first controllable vehicle
+        draw_control_info();
     EndDrawing();
 }
 
+void Simulator::draw_control_info()
+{
+    constexpr Color panel_bg{.r=100, .g=100, .b=100, .a=100};
+
+    const Vector2 panel_position{.x=0, .y=0};
+    const Vector2 panel_size{.x=120.0f, .y=200.0f};
+
+    DrawRectangleV(panel_position, panel_size, panel_bg);
+    const auto& ego{vehs_.at(0)};
+
+    {
+        auto norm_0_360{[] (float angle) -> float {
+            while (angle > 360.0f) { angle -= 360.0f; }
+            while (angle < -360.0f) { angle += 360.0f; }
+            return angle;
+        }};
+
+        // draw eps
+        constexpr Color inner_color{.r=panel_bg.r, .g=panel_bg.g, .b=panel_bg.b, .a=255};
+        constexpr Color outer_color{.r=60, .g=60, .b=60, .a=255};
+        const Vector2 center{.x=(panel_position.x + panel_size.x) / 2, .y=40.f};
+        const auto inner_radius{25.0f};
+        const auto outer_radius{35.0f};
+        const auto eps_angle{rad_to_deg(ego->eps_.angle)}; // deg
+        const auto start_angle{norm_0_360(50.0f - eps_angle)};
+        const auto end_angle{norm_0_360(130.0f - eps_angle)};
+
+        DrawCircleV(center, outer_radius, outer_color);
+        DrawCircleV(center, inner_radius, inner_color);
+        DrawCircleSector(center, outer_radius, start_angle, end_angle, 1, outer_color);
+    }
+
+    // common const for drawing accelerator and brake
+    constexpr Color axle_color{.r=10, .g=10, .b=10, .a=255};
+    constexpr Color axle_bg_color{.r=150, .g=150, .b=150, .a=255};
+    constexpr auto pedal_width{20.0f};
+    constexpr auto pedal_high{5.0f};
+    constexpr auto axle_width{10.0f};
+    constexpr auto axle_high{50.0f};
+    constexpr auto base_y{80.0f};
+
+    auto draw_pedal{[&] (const Color pedal_color, float pedal_value, float base_x) -> void {
+        const Vector2 axle_bg{.x=base_x, .y=base_y};
+        const Vector2 axle{.x=base_x, .y=base_y};
+        const Vector2 pedal{
+            .x=base_x - (pedal_width - axle_width) / 2,
+            .y=base_y - pedal_high + axle_high - pedal_value * axle_high
+        };
+        const Vector2 axle_size{
+            .x=axle_width,
+            .y=axle_high - pedal_value * axle_high
+        };
+
+        DrawRectangleV(axle_bg, {.x=axle_width, .y=axle_high}, axle_bg_color);
+        DrawRectangleV(axle, axle_size, axle_color);
+        DrawRectangleV(pedal, {.x=pedal_width, .y=pedal_high}, pedal_color);
+    }};
+
+    {
+        // draw brake
+        constexpr Color pedal_color{.r=150, .g=20, .b=20, .a=255};
+        constexpr auto base_x{20.0f};
+        draw_pedal(pedal_color, ego->brake_ratio_, base_x);
+    }
+
+    {
+        // draw accelerator
+        constexpr Color pedal_color{.r=20, .g=150, .b=20, .a=255};
+        constexpr auto base_x{100.0f};
+        draw_pedal(pedal_color, ego->accelerator_ratio_, base_x);
+    }
+}
+
+
 void Simulator::draw_mini_map()
 {
-    constexpr Color map_background{.r=100, .g=100, .b=100, .a=100};
-    constexpr int mini_map_width{200};
+    constexpr Color panel_bg{.r=100, .g=100, .b=100, .a=100};
     constexpr auto scale{5.0f};
-    const Vector2i map_top_left{.x=(GetScreenWidth() - mini_map_width), .y=0};
-    const int mini_map_height{GetScreenHeight()};
+    const Vector2 panel_size{.x=200.0f, .y=static_cast<float>(GetScreenHeight())};
+    const Vector2 panel_position{.x=(static_cast<float>(GetScreenWidth()) - panel_size.x), .y=0};
     const Vector2 map_center{
-        .x=static_cast<float>(map_top_left.x + mini_map_width * 0.5f),
-        .y=static_cast<float>(map_top_left.y + mini_map_height * 0.9f)
+        .x=panel_position.x + panel_size.x * 0.5f,
+        .y=panel_position.y + panel_size.y * 0.9f
     };
 
-    if (GetScreenWidth() < mini_map_width) {
+    if (GetScreenWidth() < panel_size.x) {
         return;
     }
 
-    DrawRectangle(map_top_left.x, map_top_left.y, mini_map_width, mini_map_height, map_background);
+    // Draw background
+    DrawRectangleV(panel_position, panel_size, panel_bg);
     const auto& ego{vehs_.at(0)};
     const Veh::SensorData& sensor_data{ego->sensor_data()};
 
@@ -1533,13 +1612,16 @@ void Veh::act(const AngleControl& control)
 
 void Veh::lat_control(const TorqControl& control)
 {
-
+    const auto eps_angle{clamp(eps_.angle, vm.min_eps_angle, vm.max_eps_angle)};
+    float front_wheel_steer{eps_angle / vm.eps_to_wheel_angle};
+    front_wheel_steer_ = front_wheel_steer;
 }
 
 void Veh::lat_control(const AngleControl& control)
 {
     const auto eps_angle{clamp(control.eps_angle, vm.min_eps_angle, vm.max_eps_angle)};
     float front_wheel_steer{eps_angle / vm.eps_to_wheel_angle};
+    eps_.angle = eps_angle;
     front_wheel_steer_ = front_wheel_steer;
 }
 
