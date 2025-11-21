@@ -72,7 +72,8 @@ void turtle_arc(Turtle* turtle, float r, float rad);
 #define tur_da_reserve(da, target_cap)                                                  \
     do {                                                                                \
         if ((da)->cap < target_cap) {                                                   \
-            (da)->items = realloc((da)->items, target_cap * sizeof((da)->items[0]))      \
+            (da)->items = realloc((da)->items, target_cap * sizeof((da)->items[0]));    \
+            (da)->cap = target_cap;                                                     \
         }                                                                               \
     } while (0)
 

@@ -1,10 +1,10 @@
 #if 0 // examples
 
 #define HLOG_IMPLEMENTATION
-#define HLOG_LOG_PATH "."               // optional settings
-#define HLOG_LOG_TIME                   // optional settings
-#define HLOG_LOG_FILENAME               // optional settings
-#define HLOG_MIN_LOG_LEVEL HLOG_INFO    // optional settings
+#define HLOG_LOG_PATH "."                // optional settings
+#define HLOG_WITH_TIME                   // optional settings
+#define HLOG_WITH_FILENAME               // optional settings
+#define HLOG_MIN_LOG_LEVEL HLOG_INFO     // optional settings
 #include "hlog.h"
 
 
@@ -233,17 +233,17 @@ void hlog_append(const char* file_path, int line, enum hlog_LogLevel log_level, 
 
     HLOG_SNPRINTF("[%-5s", hlog_log_level_name(log_level));
 
-#ifdef HLOG_LOG_TIME
+#ifdef HLOG_WITH_TIME
     time_t raw_time;
     time(&raw_time);
     char time_str[HLOG_TIME_STR_LEN];
     n = strftime(time_str, HLOG_TIME_STR_LEN, " %y%m%d %H:%M:%S", localtime(&raw_time));
     HLOG_SNPRINTF("%s", time_str);
-#endif // HLOG_LOG_TIME
+#endif // HLOG_WITH_TIME
 
-#ifdef HLOG_LOG_FILENAME
+#ifdef HLOG_WITH_FILENAME
     HLOG_SNPRINTF(" %s:%d", hlog_file_name_from_path(file_path), line);
-#endif // HLOG_LOG_FILENAME
+#endif // HLOG_WITH_FILENAME
 
     HLOG_SNPRINTF("] ");
 
