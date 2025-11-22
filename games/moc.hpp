@@ -109,6 +109,7 @@ struct Env
     Env();
     explicit Env(const EnvSettings& settings);
     StepReturn step(Action act);
+    inline float dt() const { return 1.0f / setup_.sim_fps; }
 private:
     friend Person;
 
@@ -117,15 +118,13 @@ private:
     std::mt19937 rand_gen_;
     Car ego_;
 
-    void render();
+    void render(const std::vector<int>& sensing_obsts);
     void reset_car();
     void spawn_persons();
     void step_persons();
     void step_car(Action act);
     bool coll_with_person(const Car& car);
     bool coll_with_car(const Person& p);
-
-    inline float dt() const { return 1.0f / setup_.sim_fps; }
 }; // struct Env
 
 } // namespace moc
@@ -477,7 +476,7 @@ bool Env::coll_with_car(const Person& p)
     return point_in_obb(p.position, ego_.obb());
 }
 
-void Env::render()
+void Env::render(const std::vector<int>& sensing_obsts)
 {
     BeginDrawing();
         ClearBackground(DARKGRAY);
@@ -504,7 +503,14 @@ void Env::render()
 
         // render persons
         for (const auto& p: persons_) {
-            DrawCircleV(phy_to_raylib(p.position), 5, RED);
+            bool in_sensing_list{false};
+            for (auto it : sensing_obsts) {
+                if (it == p.id) {
+                    in_sensing_list = true;
+                    break;
+                }
+            }
+            DrawCircleV(phy_to_raylib(p.position), 5, in_sensing_list ? RED : GREEN);
         }
     EndDrawing();
 }
@@ -523,11 +529,13 @@ StepReturn Env::step(Action act)
     sr.state.heading = ego_.heading;
     sr.obs.obstacles.clear();
 
+    std::vector<int> sensing_obsts{};
     const auto ego_sensing_obb{ego_.preview_obb(setup_.car_sensing_dist)};
     for (const auto& p: persons_) {
         if (point_in_obb(p.position, ego_sensing_obb)) {
+            sensing_obsts.push_back(p.id);
             sr.obs.obstacles.push_back({
-                .center = ego_.to_car_system(p.position),
+                .center = p.position,
                 .radius = MOC_PERSON_RADIUS
             });
         }
@@ -545,7 +553,7 @@ StepReturn Env::step(Action act)
         sr.reward -= 100.0f;
     }
 
-    render();
+    render(sensing_obsts);
     return sr;
 }
 
