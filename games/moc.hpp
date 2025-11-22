@@ -1,3 +1,10 @@
+/**
+ * A simple game. Moving a car Over the Crowds (MOC) with cammands `ACCEL`, `DEACCEL` and `MAINTAIN`.
+ *  - ACCELERATION: accelerate the car speed
+ *  - DEACCELERATION: deaccelerate the car speed
+ *  - MAINTAIN: maintain the current speed
+ */
+
 #ifndef MOC_HPP_
 #define MOC_HPP_
 
