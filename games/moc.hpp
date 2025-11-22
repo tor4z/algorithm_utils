@@ -1,4 +1,3 @@
-#include <cmath>
 #include <iostream>
 #define MOC_IMPLEMENTATION
 
@@ -17,12 +16,21 @@ struct Env;
 
 struct State
 {
-
+    Vec2f position;
+    Vec2f coll_shape;
+    float heading;
+    float speed;
 }; // struct State
+
+struct Obstacle
+{
+    Vec2f center;
+    float radius;
+}; // struct Obstacle
 
 struct Observation
 {
-
+    std::vector<Obstacle> obstacles;
 }; // struct Observation
 
 struct Obb
@@ -66,6 +74,7 @@ struct EnvSettings
     float car_width;
     float car_accel;
     float car_max_accel;
+    float car_sensing_dist;
 }; // struct EnvSettings
 
 struct Person
@@ -91,6 +100,8 @@ struct Car
     float spd;
     Obb obb() const;
     Obb preview_obb(float dist) const;
+    Vec2f to_car_system(const Vec2f& p);
+    float to_car_system(float heading);
 }; // struct Car
 
 struct Env
@@ -151,6 +162,7 @@ private:
 #   define MOC_EPSf    std::numeric_limits<float>::epsilon()
 #endif // MOC_EPSf
 
+#include <cmath>
 #include <cassert>
 #include <cstdlib>
 #include <raylib.h>
@@ -173,6 +185,7 @@ const EnvSettings default_settings{
     .car_width              = 1.98f,    // meter
     .car_accel              = 1.0f,     // m/s^2
     .car_max_accel          = 8.0f,     // m/s^2, for preview calculation
+    .car_sensing_dist       = 5.0f,     // m/s
 };
 
 template<typename T>
@@ -215,6 +228,11 @@ inline T pow2(T v) { return v * v; }
 template<typename T>
 inline T pow3(T v) { return v * v * v; }
 
+inline float distance(const Vec2f& a, const Vec2f& b)
+{
+    return std::sqrt(pow2(a.x - b.x) + pow2(a.y - b.y));
+}
+
 /**
  * @brief cross project of oa X ob
  * 
@@ -249,8 +267,8 @@ bool point_in_obb(const Vec2f& p, const Obb& obb)
     const Vec2f bl{.x = rel_bl.x * cos_heading + rel_bl.y * sin_heading + obb.center.x,
                    .y = rel_bl.y * cos_heading + rel_bl.x * sin_heading + obb.center.y};
 
-    return cross(bl, p, tl) * cross(br, tr, p) > 0 &&
-           cross(br, p, bl) * cross(tr, tl, p) > 0;
+    return cross(bl, p, tl) * cross(br, tr, p) >= 0 &&
+           cross(br, p, bl) * cross(tr, tl, p) >= 0;
 }
 
 inline Vec2f phy_to_raylib_shape(const Vec2f& p)
@@ -300,7 +318,6 @@ void Person::stop()
 {
     spd = 0.0f;         // stop immediate
     target_spd = 0.0f;
-    std::cout << "stop\n";
 }
 
 void Person::move(float accel, float heading, float dt)
@@ -311,8 +328,6 @@ void Person::move(float accel, float heading, float dt)
 
     // step position
     const auto mov_dist{spd * dt};
-    std::cout << "mov_dist: " << mov_dist << ", heading: " << this->heading
-        << ", dt: " << dt << ", accel_spd: " << accel_spd << "\n";
     position.x += mov_dist * std::cos(this->heading);
     position.y += mov_dist * std::sin(this->heading);
 }
@@ -327,8 +342,21 @@ Obb Car::preview_obb(float dist) const
     return {.center  = {.x = position.x + dist / 2 * std::cos(heading),
                         .y = position.y + dist / 2 * std::sin(heading)},
             .shape   = {.x = coll_shape.x + dist, .y = coll_shape.y},
-            .heading = heading
-    };
+            .heading = heading};
+}
+
+Vec2f Car::to_car_system(const Vec2f& p)
+{
+    const auto dist{distance(p, position)};
+    const auto angle{std::atan2(p.y - position.y, p.x - position.x)};
+
+    return {.x = dist * std::cos(angle),
+            .y = dist * std::sin(angle)};
+}
+
+float Car::to_car_system(float heading)
+{
+    return norm_heading(heading - this->heading);
 }
 
 Env::Env() : Env(default_settings) {}
@@ -380,18 +408,21 @@ void Env::step_persons()
     const auto stop_time{ego_.spd / setup_.car_max_accel};
     auto mov_dist{stop_time * ego_.spd - 0.5f * setup_.car_max_accel * pow2(stop_time)};
     mov_dist = max(mov_dist, 1.0f);
-    const Obb ego_preview{ego_.preview_obb(mov_dist)};
-    const Obb ego_obb{ego_.obb()};
+    const auto ego_preview{ego_.preview_obb(mov_dist)};
+    const auto ego_obb{ego_.obb()};
 
     for (auto& p : persons_) {
         const auto p_mov_dist{setup_.person_preview_time * p.spd};
-        Vec2f p_preview{.x = p.position.x + p_mov_dist * std::cos(p.heading),
-                        .y = p.position.y + p_mov_dist * std::sin(p.heading)};
-        if (point_in_obb(p.position, ego_preview)) {
-            const auto heading{norm_heading(ego_.heading + MOC_PI_2)};
+        const Vec2f p_preview{.x = p.position.x + p_mov_dist * std::cos(p.heading),
+                              .y = p.position.y + p_mov_dist * std::sin(p.heading)};
+
+        if (point_in_obb(p.position, ego_preview) || point_in_obb(p_preview, ego_preview)) {
+            const auto p_in_ego{ego_.to_car_system(p.position)};
+            const auto avoid_dir{p_in_ego.y > 0 ? 1 : -1};
+            const auto heading{norm_heading(ego_.heading + avoid_dir * MOC_PI_2)};
             const auto accel{setup_.max_person_accel};
             p.move(accel, heading, dt);
-        } else if (point_in_obb(p_preview, ego_obb) && !point_in_obb(p_preview, ego_preview)) {
+        } else if (point_in_obb(p_preview, ego_obb)) {
             p.stop();
         } else {
             p.random_move(this);
@@ -427,7 +458,7 @@ void Env::reset_car()
     ego_.spd        = 0.0f;
     ego_.shape      = {.x=setup_.car_length, .y=setup_.car_width};
     ego_.coll_shape = {.x=ego_.shape.x + coll_padding, .y=ego_.shape.y + coll_padding};
-    ego_.position   = {.x=0.0f, .y=0.0f};
+    ego_.position   = {.x=setup_.car_length / 2, .y=0.0f};
 }
 
 bool Env::coll_with_person(const Car& car)
@@ -460,8 +491,7 @@ void Env::render()
                 .x      = raylib_pos.x,
                 .y      = raylib_pos.y,
                 .width  = raylib_shape.x,
-                .height = raylib_shape.y
-            };
+                .height = raylib_shape.y};
 
             const auto ego_rotation{rad_to_deg(-ego_.heading)};
             DrawRectanglePro(rec, origin, ego_rotation, BLUE);
@@ -487,6 +517,21 @@ StepReturn Env::step(Action act)
 
     sr.terminated = false;
     sr.reward = 0.0f;
+    sr.state.coll_shape = ego_.coll_shape;
+    sr.state.position = ego_.position;
+    sr.state.speed = ego_.spd;
+    sr.state.heading = ego_.heading;
+    sr.obs.obstacles.clear();
+
+    const auto ego_sensing_obb{ego_.preview_obb(setup_.car_sensing_dist)};
+    for (const auto& p: persons_) {
+        if (point_in_obb(p.position, ego_sensing_obb)) {
+            sr.obs.obstacles.push_back({
+                .center = ego_.to_car_system(p.position),
+                .radius = MOC_PERSON_RADIUS
+            });
+        }
+    }
 
     if (act == ACT_ACCEL || act == ACT_DEACCEL) {
         sr.reward -= 0.1f;
