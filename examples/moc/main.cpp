@@ -77,6 +77,7 @@ moc::Action POMDPSolver::solve(const POMDPSolver::StateNode& state)
             }
             std::cout << stringify(an.act) << ": " << an.value << "\n";
         }
+        std::cout << "best: " << stringify(result) << "\n";
         std::cout << "====\n";
         return result;
     }
@@ -84,15 +85,15 @@ moc::Action POMDPSolver::solve(const POMDPSolver::StateNode& state)
 
 float POMDPSolver::simulate(StateNode& state, moc::Action act)
 {
-    constexpr auto gamma{0.3f};
-    if (state.depth > 3) return 0.0f;
+    constexpr auto gamma{0.003f};
+    if (state.depth > 10) return 0.0f;
 
     ActionNode an{.act=act, .value=0};
     for (int i = 0; i < 1; ++i) {
         const auto sa{simulate_action(state, act)};
         an.children.push_back(sa.state);
+        if (act == moc::ACT_DEACCEL) continue;
         auto& new_state{an.children.back()};
-        if (sa.reward <= -1000.0f) continue;
         for (auto act: actions) {
             an.value += sa.reward * gamma + simulate(new_state, act);
         }
@@ -139,7 +140,7 @@ POMDPSolver::ActionSimResult POMDPSolver::simulate_action(const StateNode& state
     if (accel >= 0) {
         for (const auto& obst: asr.state.obsts) {
             if (moc::point_in_obb(obst.center, ego_obb)) {
-                asr.reward -= 1000.0f;
+                asr.reward -= 10.0f;
                 break;
             }
         }
@@ -156,7 +157,7 @@ int main()
     auto env{moc::Env(settings)};
     bool terminated{false};
 
-    POMDPSolver solver{0.3f};
+    POMDPSolver solver{0.1f};
     POMDPSolver::StateNode state{};
     bool first_step{true};
     while (!terminated) {

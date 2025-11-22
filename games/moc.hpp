@@ -73,6 +73,7 @@ struct EnvSettings
     float car_length;
     float car_width;
     float car_accel;
+    float car_deaccel;
     float car_max_accel;
     float car_sensing_dist;
 }; // struct EnvSettings
@@ -183,6 +184,7 @@ const EnvSettings default_settings{
     .car_length             = 4.7f,     // meter
     .car_width              = 1.98f,    // meter
     .car_accel              = 1.0f,     // m/s^2
+    .car_deaccel            = -2.0f,    // m/s^2
     .car_max_accel          = 8.0f,     // m/s^2, for preview calculation
     .car_sensing_dist       = 5.0f,     // m/s
 };
@@ -435,10 +437,10 @@ void Env::step_car(Action act)
 
     switch (act) {
     case ACT_ACCEL:
-        ego_.spd = ego_.spd + dt * setup_.car_accel;
+        ego_.spd += dt * setup_.car_accel;
         break;
     case ACT_DEACCEL:
-        ego_.spd = max(ego_.spd - dt * setup_.car_accel, 0.0f);
+        ego_.spd = max(ego_.spd + dt * setup_.car_deaccel, 0.0f);
         break;
     case ACT_MAINTAIN:
         break;
@@ -478,8 +480,47 @@ bool Env::coll_with_car(const Person& p)
 
 void Env::render(const std::vector<int>& sensing_obsts)
 {
+    int screen_half_height{GetScreenHeight() / 2};
+    int pos_offset{0};
+
+    auto offset_position{[&pos_offset] (const Vec2f& p) -> Vec2f {
+        return {.x=p.x, .y=p.y + pos_offset};
+    }};
+
+    auto offset_rec{[&pos_offset] (const Rectangle& r) -> Rectangle {
+        return {.x=r.x, .y=r.y + pos_offset, .width=r.width, .height=r.height};
+    }};
+
+    {
+        // calculate position offset
+        const auto ego_pos{phy_to_raylib(ego_.position)};
+        if (ego_pos.y < screen_half_height) {
+            pos_offset = screen_half_height - ego_pos.y;
+        }
+    }
+
     BeginDrawing();
         ClearBackground(DARKGRAY);
+        {
+            // draw grid
+            Vec2f line_start{};
+            Vec2f line_end{};
+            for (float x = 0; x < setup_.map_length; x += 1) {
+                line_start.x = x;
+                line_start.y = -setup_.map_width / 2;
+                line_end.x = x;
+                line_end.y = setup_.map_width / 2;
+                DrawLineV(offset_position(phy_to_raylib(line_start)), offset_position(phy_to_raylib(line_end)), BLACK);
+            }
+            for (float y = -setup_.map_width / 2; y < setup_.map_width / 2; y += 1) {   
+                line_start.x = 0;
+                line_start.y = y;
+                line_end.x = setup_.map_length;
+                line_end.y = y;
+                DrawLineV(offset_position(phy_to_raylib(line_start)), offset_position(phy_to_raylib(line_end)), BLACK);
+            }
+        }
+
         // render car
         {
             const Vec2f raylib_shape{phy_to_raylib_shape(ego_.shape)};
@@ -493,11 +534,11 @@ void Env::render(const std::vector<int>& sensing_obsts)
                 .height = raylib_shape.y};
 
             const auto ego_rotation{rad_to_deg(-ego_.heading)};
-            DrawRectanglePro(rec, origin, ego_rotation, BLUE);
+            DrawRectanglePro(offset_rec(rec), origin, ego_rotation, BLUE);
             // draw simple sector to indicate ego heading
             const auto start_angle{45.0f + ego_rotation};
             const auto end_angle{135.0f + ego_rotation};
-            DrawCircleSector(phy_to_raylib(ego_.position), 10.0f,
+            DrawCircleSector(offset_position(raylib_pos), 10.0f,
                 start_angle, end_angle, 16, YELLOW);
         }
 
@@ -510,7 +551,7 @@ void Env::render(const std::vector<int>& sensing_obsts)
                     break;
                 }
             }
-            DrawCircleV(phy_to_raylib(p.position), 5, in_sensing_list ? RED : GREEN);
+            DrawCircleV(offset_position(phy_to_raylib(p.position)), 5, in_sensing_list ? RED : GREEN);
         }
     EndDrawing();
 }
