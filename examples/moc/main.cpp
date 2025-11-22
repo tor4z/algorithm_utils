@@ -1,7 +1,10 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
+#include <ratio>
 #include <vector>
 #include <iostream>
+#include <chrono>
 
 #define MOC_IMPLEMENTATION
 #include "games/moc.hpp"
@@ -10,15 +13,68 @@
 const float car_accel{2.0f};
 const moc::Action actions[]{moc::ACT_DEACCEL, moc::ACT_ACCEL, moc::ACT_MAINTAIN};
 
-std::string stringify(moc::Action act)
+inline std::string& stringify(moc::Action act)
 {
+    static std::string invalid{"invalid"};
+    static std::string accel{"accel"};
+    static std::string deaccel{"deaccel"};
+    static std::string maintain{"maintain"};
+
     switch (act) {
-    case moc::ACT_ACCEL:    return "accel";
-    case moc::ACT_DEACCEL:  return "deaccel";
-    case moc::ACT_MAINTAIN: return "maintain";
+    case moc::ACT_ACCEL:    return accel;
+    case moc::ACT_DEACCEL:  return deaccel;
+    case moc::ACT_MAINTAIN: return maintain;
+    default:                return invalid;
     }
-    return "invalid";
 }
+
+struct Profiler
+{
+    Profiler() { reset(); }
+
+    void tic()
+    {
+        const auto now{std::chrono::steady_clock::now()};
+        tic_ = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch());
+    }
+
+    void toc()
+    {
+        const auto now{std::chrono::steady_clock::now()};
+        const auto time_cost{std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch() - tic_)};
+        const auto time_cost_micro{static_cast<unsigned int>(time_cost.count())};
+        max_ = std::max(max_, time_cost_micro);
+        min_ = std::min(min_, time_cost_micro);
+        avg_ = double(avg_ * n_) / double(n_ + 1) + (double)time_cost_micro / double(n_ + 1);
+        ++n_;
+    }
+
+    void report(int n)
+    {
+        auto to_ms{[](unsigned int micro) -> unsigned int { return micro / 1000; }};
+
+        if (n_ % n == 0) {
+            std::cout << "[Profiler] min: " << to_ms(min_)
+                      << "ms, max: " << to_ms(max_)
+                      << "ms, avg: " << to_ms(avg_) << "ms\n"; 
+            reset();
+        }
+    }
+private:
+    std::chrono::microseconds tic_;
+    unsigned int max_;
+    unsigned int min_;
+    unsigned int avg_;
+    int n_;
+
+    void reset()
+    {
+        max_ = 0;
+        min_ = 0xffffffff;
+        avg_ = 0;
+        n_ = 0;
+    }
+}; // struct Profiler
 
 struct POMDPSolver
 {
@@ -61,11 +117,16 @@ private:
 
 moc::Action POMDPSolver::solve(const POMDPSolver::StateNode& state)
 {
+    static Profiler profiler{};
+
     root_ = state;
     root_.depth = 0;
+    profiler.tic();
     for (auto act: actions) {
         simulate(root_, act);
     }
+    profiler.toc();
+    profiler.report(10);
 
     {
         // take best action
@@ -87,13 +148,12 @@ moc::Action POMDPSolver::solve(const POMDPSolver::StateNode& state)
 float POMDPSolver::simulate(StateNode& state, moc::Action act)
 {
     constexpr auto gamma{0.003f};
-    if (state.depth > 10) return 0.0f;
+    if (state.depth > 5) return 0.0f;
 
     ActionNode an{.act=act, .value=0};
-    for (int i = 0; i < 1; ++i) {
+    {
         const auto sa{simulate_action(state, act)};
         an.children.push_back(sa.state);
-        if (act == moc::ACT_DEACCEL) continue;
         auto& new_state{an.children.back()};
         for (auto act: actions) {
             an.value += sa.reward * gamma + simulate(new_state, act);
@@ -158,7 +218,7 @@ int main()
     auto env{moc::Env(settings)};
     bool terminated{false};
 
-    POMDPSolver solver{0.1f};
+    POMDPSolver solver{0.2f};
     POMDPSolver::StateNode state{};
     bool first_step{true};
     while (!terminated) {
