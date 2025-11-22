@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <ratio>
 #include <vector>
 #include <iostream>
 #include <chrono>
@@ -13,12 +12,12 @@
 const float car_accel{2.0f};
 const moc::Action actions[]{moc::ACT_DEACCEL, moc::ACT_ACCEL, moc::ACT_MAINTAIN};
 
-inline std::string& stringify(moc::Action act)
+inline const std::string& stringify(moc::Action act)
 {
-    static std::string invalid{"invalid"};
-    static std::string accel{"accel"};
-    static std::string deaccel{"deaccel"};
-    static std::string maintain{"maintain"};
+    static const std::string invalid{"invalid"};
+    static const std::string accel{"accel"};
+    static const std::string deaccel{"deaccel"};
+    static const std::string maintain{"maintain"};
 
     switch (act) {
     case moc::ACT_ACCEL:    return accel;

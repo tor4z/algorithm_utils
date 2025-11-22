@@ -5,6 +5,7 @@
 
 | Library | Description |
 | ------ | ----- |
+| carlet.hpp | simple auto-driving car simulator |
 | bicycle.hpp | kinematic bicycle model |
 | fitty.hpp | line fitting lib |
 | lie.hpp | lie theory lib |
@@ -17,3 +18,11 @@
 | flags.hpp | command line argument parse lib |
 | gnuplot.hpp | gnuplot wrapper for c++ |
 | rviz.hpp | a raylib wrapper, simple version `ROS rviz` |
+
+
+### Games
+
+| Library | Description |
+| ------ | ----- |
+| games/moc.hpp | moving a car over the crowds |
+
