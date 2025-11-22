@@ -1,6 +1,7 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <iostream>
 
 #define MOC_IMPLEMENTATION
 #include "games/moc.hpp"
@@ -169,7 +170,6 @@ int main()
         state.ego_heading = sr.state.heading;
         state.ego_speed = sr.state.speed;
         state.obsts = sr.obs.obstacles;
-        std::cout << "speed: " << state.ego_speed << "\n";
         if (sr.terminated) terminated = true;
         first_step = false;
     }

@@ -1,6 +1,3 @@
-#include <iostream>
-#define MOC_IMPLEMENTATION
-
 #ifndef MOC_HPP_
 #define MOC_HPP_
 
