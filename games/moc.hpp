@@ -25,6 +25,13 @@ struct Observation
 
 }; // struct Observation
 
+struct Obb
+{
+    Vec2f center;
+    Vec2f shape;
+    float heading;
+}; // struct Obb
+
 enum Action
 {
     ACT_ACCEL = 0,
@@ -52,6 +59,7 @@ struct EnvSettings
     float person_accel_prob;
     float person_turn_prob;
     float person_turn_std;
+    float person_preview_time;
     float map_length;
     float map_width;
     float car_length;
@@ -67,10 +75,11 @@ struct Person
     float spd;
     float accel;
     float target_spd;
+    int id;
 
     void random_move(Env* env);
     void stop();
-    void move(float accel, float heading);
+    void move(float accel, float heading, float dt);
 }; // struct Person
 
 struct Car
@@ -80,6 +89,8 @@ struct Car
     Vec2f coll_shape;
     float heading;
     float spd;
+    Obb obb() const;
+    Obb preview_obb(float dist) const;
 }; // struct Car
 
 struct Env
@@ -116,6 +127,7 @@ private:
 #define MOC_CPP_
 
 #define MOC_PI              3.14159265358979323846
+#define MOC_PI_2            (MOC_PI / 2)
 #define MOC_2_PI            (2 * MOC_PI)
 
 #ifndef MOC_WIN_HEIGHT
@@ -145,13 +157,6 @@ private:
 
 namespace moc {
 
-struct Obb
-{
-    Vec2f center;
-    Vec2f shape;
-    float heading;
-}; // struct Obb
-
 const EnvSettings default_settings{
     .random_seed            = 0,
     .sim_fps                = 30,
@@ -161,6 +166,7 @@ const EnvSettings default_settings{
     .person_accel_prob      = 0.2f,
     .person_turn_prob       = 0.1f,
     .person_turn_std        = 1.0f,
+    .person_preview_time    = 1.0f,     // sec.
     .map_length             = 100.0f,   // meter
     .map_width              = 20.0f,    // meter
     .car_length             = 4.7f,     // meter
@@ -292,12 +298,37 @@ void Person::random_move(Env* env)
 
 void Person::stop()
 {
-
+    spd = 0.0f;         // stop immediate
+    target_spd = 0.0f;
+    std::cout << "stop\n";
 }
 
-void Person::move(float accel, float heading)
+void Person::move(float accel, float heading, float dt)
 {
+    this->heading = heading;
+    const auto accel_spd{spd + dt * accel};
+    spd = 2.0f;
 
+    // step position
+    const auto mov_dist{spd * dt};
+    std::cout << "mov_dist: " << mov_dist << ", heading: " << this->heading
+        << ", dt: " << dt << ", accel_spd: " << accel_spd << "\n";
+    position.x += mov_dist * std::cos(this->heading);
+    position.y += mov_dist * std::sin(this->heading);
+}
+
+Obb Car::obb() const
+{
+    return {.center=position, .shape=coll_shape, .heading=heading};
+}
+
+Obb Car::preview_obb(float dist) const
+{
+    return {.center  = {.x = position.x + dist / 2 * std::cos(heading),
+                        .y = position.y + dist / 2 * std::sin(heading)},
+            .shape   = {.x = coll_shape.x + dist, .y = coll_shape.y},
+            .heading = heading
+    };
 }
 
 Env::Env() : Env(default_settings) {}
@@ -337,6 +368,7 @@ void Env::spawn_persons()
         person.heading = rand_ab(-MOC_PI, MOC_PI);
         person.position.x = rand_ab(0.0f, setup_.map_length);
         person.position.y = rand_ab(-setup_.map_width / 2, setup_.map_width / 2);
+        person.id = i;
         if (coll_with_car(person)) { continue; /* retry */ }
         ++i;
     }
@@ -345,22 +377,21 @@ void Env::spawn_persons()
 void Env::step_persons()
 {
     const auto dt{this->dt()};
-    Obb ego_preview{};
     const auto stop_time{ego_.spd / setup_.car_max_accel};
-    const auto mov_dist{stop_time * ego_.spd - 0.5f * setup_.car_max_accel * pow2(stop_time)};
-    ego_preview.heading = ego_.heading;
-    ego_preview.shape.y = ego_.coll_shape.y;
-    ego_preview.shape.x = ego_.coll_shape.x + mov_dist;
-    ego_preview.center.x = ego_.position.x + mov_dist / 2 * std::cos(ego_.heading);
-    ego_preview.center.y = ego_.position.y + mov_dist / 2 * std::sin(ego_.heading);
+    auto mov_dist{stop_time * ego_.spd - 0.5f * setup_.car_max_accel * pow2(stop_time)};
+    mov_dist = max(mov_dist, 1.0f);
+    const Obb ego_preview{ego_.preview_obb(mov_dist)};
+    const Obb ego_obb{ego_.obb()};
 
     for (auto& p : persons_) {
-        Vec2f p_preview{}; // TODO
+        const auto p_mov_dist{setup_.person_preview_time * p.spd};
+        Vec2f p_preview{.x = p.position.x + p_mov_dist * std::cos(p.heading),
+                        .y = p.position.y + p_mov_dist * std::sin(p.heading)};
         if (point_in_obb(p.position, ego_preview)) {
-            float heading{};
-            float accel{};
-            p.move(accel, heading);
-        } else if (point_in_obb(p_preview, ego_preview)) {
+            const auto heading{norm_heading(ego_.heading + MOC_PI_2)};
+            const auto accel{setup_.max_person_accel};
+            p.move(accel, heading, dt);
+        } else if (point_in_obb(p_preview, ego_obb) && !point_in_obb(p_preview, ego_preview)) {
             p.stop();
         } else {
             p.random_move(this);
@@ -401,7 +432,7 @@ void Env::reset_car()
 
 bool Env::coll_with_person(const Car& car)
 {
-    const Obb ego_obb{.center=car.position, .shape=car.coll_shape, .heading=car.heading};
+    const Obb ego_obb{car.obb()};
     for (const auto& p : persons_) {
         if (point_in_obb(p.position, ego_obb)) {
             return true;
@@ -412,8 +443,7 @@ bool Env::coll_with_person(const Car& car)
 
 bool Env::coll_with_car(const Person& p)
 {
-    const Obb ego_obb{.center=ego_.position, .shape=ego_.coll_shape, .heading=ego_.heading};
-    return point_in_obb(p.position, ego_obb);
+    return point_in_obb(p.position, ego_.obb());
 }
 
 void Env::render()
