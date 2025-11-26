@@ -5,7 +5,8 @@
 int main()
 {
     bool terminated{false};
-    auto env{rs::Env()};
+    auto settings{rs::EnvSettings::from_default()};
+    auto env{rs::Env(settings)};
 
     rs::Action act{rs::ACT_RIGHT};
     while (!terminated) {

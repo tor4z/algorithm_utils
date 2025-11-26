@@ -74,6 +74,8 @@ struct EnvSettings
     size_t num_rocks;
     size_t num_good_rocks;
     float eta;
+
+    static EnvSettings from_default();
 }; // struct EnvSettings
 
 struct Env
@@ -162,6 +164,10 @@ inline constexpr float distance(const T& a, const T& b)
     return std::sqrt(static_cast<float>(pow2(a.x - b.x) + pow2(a.y - b.y)));
 }
 
+EnvSettings EnvSettings::from_default()
+{
+    return default_settings;
+}
 
 Env::Env() : Env(default_settings) {}
 
